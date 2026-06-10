@@ -6,3 +6,4 @@ dist
 .fallow/
 .tmp-*/
 .playwright-mcp/
+*.tgz
