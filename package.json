@@ -1,0 +1,70 @@
+{
+  "name": "@propio/providers",
+  "version": "0.1.0",
+  "description": "Provider adapters for LLM APIs (Anthropic, Bedrock, Ollama, OpenRouter, Gemini, xAI, Cloudflare) with a unified streaming chat interface",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/esack7/propio-providers.git"
+  },
+  "homepage": "https://github.com/esack7/propio-providers#readme",
+  "bugs": {
+    "url": "https://github.com/esack7/propio-providers/issues"
+  },
+  "keywords": [
+    "ai",
+    "llm",
+    "provider",
+    "streaming",
+    "anthropic",
+    "ollama",
+    "bedrock",
+    "openrouter",
+    "gemini",
+    "xai",
+    "cloudflare"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepack": "npm run build",
+    "test": "NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest",
+    "test:watch": "NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --watch",
+    "test:integration": "NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --testPathIgnorePatterns=/node_modules/ integration",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.100.1",
+    "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+    "ollama": "0.6.3"
+  },
+  "devDependencies": {
+    "@jest/globals": "30.3.0",
+    "@types/jest": "30.0.0",
+    "@types/node": "25.5.2",
+    "jest": "30.3.0",
+    "prettier": "3.8.1",
+    "ts-jest": "29.4.9",
+    "typescript": "6.0.2"
+  }
+}
