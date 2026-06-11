@@ -1,4 +1,4 @@
-# @propio/providers
+# @propio-ai/providers
 
 Provider adapters for LLM APIs with a unified streaming chat interface. Supports Anthropic (Claude), AWS Bedrock, Ollama, OpenRouter, Google Gemini, xAI (Grok), and Cloudflare Workers AI.
 
@@ -7,7 +7,7 @@ Extracted from [propio-agent](https://github.com/esack7/propio-agent), which use
 ## Install
 
 ```bash
-npm install @propio/providers
+npm install @propio-ai/providers
 ```
 
 Requires Node.js >= 20. ESM only.
@@ -15,7 +15,7 @@ Requires Node.js >= 20. ESM only.
 ## Usage
 
 ```ts
-import { createProvider, type ChatStreamEvent } from "@propio/providers";
+import { createProvider, type ChatStreamEvent } from "@propio-ai/providers";
 
 const provider = createProvider({
   name: "claude",
