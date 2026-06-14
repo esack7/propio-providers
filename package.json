@@ -50,7 +50,7 @@
     "prepack": "npm run build",
     "test": "NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest",
     "test:watch": "NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --watch",
-    "test:integration": "NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest --testPathIgnorePatterns=/node_modules/ integration",
+    "test:integration": "NODE_OPTIONS=\"--experimental-vm-modules --disable-warning=ExperimentalWarning\" jest -c jest.integration.config.cjs --runInBand",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
@@ -63,6 +63,7 @@
     "@jest/globals": "30.3.0",
     "@types/jest": "30.0.0",
     "@types/node": "25.5.2",
+    "dotenv": "^17.4.2",
     "jest": "30.3.0",
     "prettier": "3.8.1",
     "ts-jest": "29.4.9",
