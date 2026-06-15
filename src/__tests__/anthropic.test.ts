@@ -42,6 +42,10 @@ import {
 
 let AnthropicProvider: any;
 
+const SONNET_46_MODEL = "claude-sonnet-4-6";
+const HAIKU_45_MODEL = "claude-haiku-4-5-20251001";
+const OPUS_48_MODEL = "claude-opus-4-8";
+
 beforeAll(async () => {
   const mod = await import("../providers/anthropic.js");
   AnthropicProvider = mod.AnthropicProvider;
@@ -53,7 +57,7 @@ beforeAll(async () => {
 
 function createTestProvider(options: Record<string, unknown> = {}) {
   return new AnthropicProvider({
-    model: "claude-sonnet-4-6",
+    model: SONNET_46_MODEL,
     contextWindowTokens: 200_000,
     apiKey: "test-key",
     ...options,
@@ -66,7 +70,7 @@ function createChatRequest(
 ): ChatRequest {
   return {
     messages: [{ role: "user", content }],
-    model: "claude-sonnet-4-6",
+    model: SONNET_46_MODEL,
     ...options,
   };
 }
@@ -426,7 +430,7 @@ describe("AnthropicProvider", () => {
       );
     });
 
-    it("attaches thinking+signature as reasoningContent on tool_calls event", async () => {
+    it("uses adaptive thinking for Sonnet 4.6 reasoning requests", async () => {
       mockStream.mockReturnValue(
         makeStream(thinkingToolCallStreamEvents("my thoughts", "sig-123")),
       );
@@ -434,11 +438,64 @@ describe("AnthropicProvider", () => {
         createTestProvider(),
         createChatRequest("think", { requestReasoning: true }),
       );
+      const callArgs = mockStream.mock.calls[0][0];
+      expect(callArgs.max_tokens).toBe(16384);
+      expect(callArgs.thinking).toEqual(
+        expect.objectContaining({
+          type: "adaptive",
+          display: "summarized",
+        }),
+      );
+      expect(callArgs.thinking).not.toHaveProperty("budget_tokens");
+      expect(callArgs.output_config).toEqual({ effort: "high" });
       const blocks = getToolCallReasoningBlocks(events);
       expect(blocks[0]).toMatchObject({
         thinking: "my thoughts",
         signature: "sig-123",
       });
+    });
+
+    it("uses adaptive thinking for Opus 4.8 reasoning requests", async () => {
+      mockStream.mockReturnValue(makeStream(thinkingToolCallStreamEvents()));
+      await collectStream(
+        createTestProvider(),
+        createChatRequest("think", {
+          model: OPUS_48_MODEL,
+          requestReasoning: true,
+        }),
+      );
+      const callArgs = mockStream.mock.calls[0][0];
+      expect(callArgs.max_tokens).toBe(16384);
+      expect(callArgs.thinking).toEqual(
+        expect.objectContaining({
+          type: "adaptive",
+          display: "summarized",
+        }),
+      );
+      expect(callArgs.thinking).not.toHaveProperty("budget_tokens");
+      expect(callArgs.output_config).toEqual({ effort: "high" });
+    });
+
+    it("keeps manual enabled thinking for Haiku 4.5 reasoning requests", async () => {
+      mockStream.mockReturnValue(makeStream(thinkingToolCallStreamEvents()));
+      await collectStream(
+        createTestProvider(),
+        createChatRequest("think", {
+          model: HAIKU_45_MODEL,
+          requestReasoning: true,
+        }),
+      );
+      const callArgs = mockStream.mock.calls[0][0];
+      expect(callArgs.max_tokens).toBeGreaterThan(
+        callArgs.thinking.budget_tokens,
+      );
+      expect(callArgs.thinking).toEqual(
+        expect.objectContaining({
+          type: "enabled",
+          budget_tokens: 10000,
+        }),
+      );
+      expect(callArgs.output_config).toBeUndefined();
     });
 
     it("preserves redacted_thinking blocks in reasoningContent", async () => {
@@ -456,32 +513,10 @@ describe("AnthropicProvider", () => {
       });
     });
 
-    it("sets max_tokens above thinking budget_tokens when reasoning enabled", async () => {
-      mockStream.mockReturnValue(makeStream(thinkingToolCallStreamEvents()));
-      await collectStream(
-        createTestProvider(),
-        createChatRequest("hi", { requestReasoning: true }),
-      );
-      const callArgs = mockStream.mock.calls[0][0];
-      expect(callArgs.max_tokens).toBeGreaterThan(
-        callArgs.thinking?.budget_tokens ?? 0,
-      );
-    });
-
-    it("enables thinking param when requestReasoning is true", async () => {
-      mockStream.mockReturnValue(makeStream(thinkingToolCallStreamEvents()));
-      await collectStream(
-        createTestProvider(),
-        createChatRequest("hi", { requestReasoning: true }),
-      );
-      expect(mockStream.mock.calls[0][0].thinking).toEqual(
-        expect.objectContaining({ type: "enabled" }),
-      );
-    });
-
     it("omits thinking param when requestReasoning is not set", async () => {
       await collectStream(createTestProvider(), createChatRequest());
       expect(mockStream.mock.calls[0][0].thinking).toBeUndefined();
+      expect(mockStream.mock.calls[0][0].output_config).toBeUndefined();
     });
 
     it("does not replay thinking blocks when thinking is not requested", async () => {

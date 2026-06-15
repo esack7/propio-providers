@@ -22,6 +22,12 @@ const THINKING_BUDGET_TOKENS = 10000;
 const THINKING_OUTPUT_HEADROOM = 1000;
 const DEFAULT_MAX_TOKENS = 16384;
 
+type AnthropicReasoningRequest = {
+  thinking?: Anthropic.ThinkingConfigParam;
+  output_config?: Anthropic.OutputConfig;
+  maxTokens: number;
+};
+
 type AnthropicReplayBlock =
   | {
       type: "thinking";
@@ -73,6 +79,7 @@ export class AnthropicProvider extends BaseProvider {
   // fallow-ignore-next-line complexity
   async *streamChat(request: ChatRequest): AsyncIterable<ChatStreamEvent> {
     try {
+      const model = request.model || this.model;
       // Concatenate multiple system messages rather than silently dropping all but the first.
       const systemMessages = request.messages.filter(
         (m) => m.role === "system",
@@ -93,28 +100,25 @@ export class AnthropicProvider extends BaseProvider {
         this.chatToolToAnthropicTool(tool),
       );
 
-      const thinkingBudget = request.requestReasoning
-        ? THINKING_BUDGET_TOKENS
-        : undefined;
-      // max_tokens must exceed thinking.budget_tokens; use 16k floor for normal requests.
-      const maxTokens = thinkingBudget
-        ? Math.max(
-            thinkingBudget + THINKING_OUTPUT_HEADROOM,
-            DEFAULT_MAX_TOKENS,
-          )
-        : DEFAULT_MAX_TOKENS;
+      const reasoningRequest = this.buildReasoningRequestParams(
+        model,
+        request.requestReasoning === true,
+      );
 
       const createStream = () =>
         this.client.messages.create(
           {
-            model: request.model || this.model,
-            max_tokens: maxTokens,
+            model,
+            max_tokens: reasoningRequest.maxTokens,
             system: systemContent,
             messages: messages as Anthropic.MessageParam[],
             tools: anthropicTools as Anthropic.Tool[] | undefined,
-            thinking: thinkingBudget
-              ? { type: "enabled", budget_tokens: thinkingBudget }
-              : undefined,
+            ...(reasoningRequest.thinking
+              ? { thinking: reasoningRequest.thinking }
+              : {}),
+            ...(reasoningRequest.output_config
+              ? { output_config: reasoningRequest.output_config }
+              : {}),
             stream: true,
           },
           { signal: request.signal },
@@ -309,6 +313,44 @@ export class AnthropicProvider extends BaseProvider {
       default:
         return "end_turn";
     }
+  }
+
+  private buildReasoningRequestParams(
+    model: string,
+    requestReasoning: boolean,
+  ): AnthropicReasoningRequest {
+    if (!requestReasoning) {
+      return { maxTokens: DEFAULT_MAX_TOKENS };
+    }
+
+    if (this.usesAdaptiveThinking(model)) {
+      return {
+        maxTokens: DEFAULT_MAX_TOKENS,
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "high" },
+      };
+    }
+
+    const thinkingBudget = THINKING_BUDGET_TOKENS;
+    return {
+      maxTokens: Math.max(
+        thinkingBudget + THINKING_OUTPUT_HEADROOM,
+        DEFAULT_MAX_TOKENS,
+      ),
+      thinking: { type: "enabled", budget_tokens: thinkingBudget },
+    };
+  }
+
+  private usesAdaptiveThinking(model: string): boolean {
+    return (
+      model === "claude-opus-4-8" ||
+      model === "claude-opus-4-7" ||
+      model === "claude-opus-4-6" ||
+      model === "claude-sonnet-4-6" ||
+      model === "claude-fable-5" ||
+      model === "claude-mythos-5" ||
+      model === "claude-mythos-preview"
+    );
   }
 
   private chatMessageToAnthropicMessage(

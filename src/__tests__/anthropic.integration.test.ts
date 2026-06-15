@@ -15,6 +15,8 @@ const SONNET_MODEL =
   optionalEnv("ANTHROPIC_SONNET_MODEL") ?? "claude-sonnet-4-6";
 const HAIKU_MODEL =
   optionalEnv("ANTHROPIC_HAIKU_MODEL") ?? "claude-haiku-4-5-20251001";
+const OPUS_MODEL = optionalEnv("ANTHROPIC_OPUS_MODEL") ?? "claude-opus-4-8";
+const FABLE_MODEL = optionalEnv("ANTHROPIC_FABLE_MODEL") ?? "claude-fable-5";
 
 describeProviderIntegration(
   "anthropic",
@@ -36,12 +38,25 @@ describeProviderIntegration(
           key: HAIKU_MODEL,
           contextWindowTokens: 200_000,
         },
+        {
+          name: "Claude Opus 4.8",
+          key: OPUS_MODEL,
+          contextWindowTokens: 1_000_000,
+        },
+        {
+          name: "Claude Fable 5",
+          key: FABLE_MODEL,
+          contextWindowTokens: 1_000_000,
+        },
       ],
       defaultModel: SONNET_MODEL,
       apiKey: requireEnv("ANTHROPIC_API_KEY"),
     };
 
-    async function smokeTestModel(modelKey: string): Promise<void> {
+    async function smokeTestModel(
+      modelKey: string,
+      options: { requestReasoning?: boolean } = {},
+    ): Promise<void> {
       const provider = createProvider(anthropicProviderConfig, modelKey);
       expect(provider).toBeInstanceOf(AnthropicProvider);
       expect(provider.name).toBe("anthropic");
@@ -52,6 +67,7 @@ describeProviderIntegration(
       for await (const chunk of provider.streamChat({
         model: modelKey,
         messages: [{ role: "user", content: "Reply with exactly: OK" }],
+        ...(options.requestReasoning ? { requestReasoning: true } : {}),
       })) {
         if (chunk.type === "assistant_text") {
           assistantText.push(chunk.delta);
@@ -71,6 +87,14 @@ describeProviderIntegration(
 
     it("should smoke test Claude Haiku", async () => {
       await smokeTestModel(HAIKU_MODEL);
+    }, 30_000);
+
+    it("should smoke test Claude Opus reasoning", async () => {
+      await smokeTestModel(OPUS_MODEL, { requestReasoning: true });
+    }, 30_000);
+
+    it.skip("should smoke test Claude Fable", async () => {
+      await smokeTestModel(FABLE_MODEL);
     }, 30_000);
   },
 );
