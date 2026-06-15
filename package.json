@@ -1,6 +1,6 @@
 {
   "name": "@propio-ai/providers",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Provider adapters for LLM APIs (Anthropic, Bedrock, Ollama, OpenRouter, Gemini, xAI, Cloudflare) with a unified streaming chat interface",
   "type": "module",
   "main": "dist/index.js",
