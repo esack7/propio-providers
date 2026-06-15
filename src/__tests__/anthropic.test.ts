@@ -114,6 +114,18 @@ function getToolCallReasoningBlocks(events: ChatStreamEvent[]) {
   return JSON.parse(getToolCallEvent(events).reasoningContent);
 }
 
+function expectAdaptiveThinkingRequest(callArgs: any) {
+  expect(callArgs.max_tokens).toBe(16384);
+  expect(callArgs.thinking).toEqual(
+    expect.objectContaining({
+      type: "adaptive",
+      display: "summarized",
+    }),
+  );
+  expect(callArgs.thinking).not.toHaveProperty("budget_tokens");
+  expect(callArgs.output_config).toEqual({ effort: "high" });
+}
+
 function textStreamEvents(text = "Hello!") {
   return [
     {
@@ -439,15 +451,7 @@ describe("AnthropicProvider", () => {
         createChatRequest("think", { requestReasoning: true }),
       );
       const callArgs = mockStream.mock.calls[0][0];
-      expect(callArgs.max_tokens).toBe(16384);
-      expect(callArgs.thinking).toEqual(
-        expect.objectContaining({
-          type: "adaptive",
-          display: "summarized",
-        }),
-      );
-      expect(callArgs.thinking).not.toHaveProperty("budget_tokens");
-      expect(callArgs.output_config).toEqual({ effort: "high" });
+      expectAdaptiveThinkingRequest(callArgs);
       const blocks = getToolCallReasoningBlocks(events);
       expect(blocks[0]).toMatchObject({
         thinking: "my thoughts",
@@ -465,15 +469,7 @@ describe("AnthropicProvider", () => {
         }),
       );
       const callArgs = mockStream.mock.calls[0][0];
-      expect(callArgs.max_tokens).toBe(16384);
-      expect(callArgs.thinking).toEqual(
-        expect.objectContaining({
-          type: "adaptive",
-          display: "summarized",
-        }),
-      );
-      expect(callArgs.thinking).not.toHaveProperty("budget_tokens");
-      expect(callArgs.output_config).toEqual({ effort: "high" });
+      expectAdaptiveThinkingRequest(callArgs);
     });
 
     it("keeps manual enabled thinking for Haiku 4.5 reasoning requests", async () => {

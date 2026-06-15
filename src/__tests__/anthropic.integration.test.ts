@@ -7,6 +7,7 @@ import { AnthropicProviderConfig } from "../config.js";
 import { AnthropicProvider } from "../providers/anthropic.js";
 import {
   describeProviderIntegration,
+  expectProviderStreamsAssistantText,
   optionalEnv,
   requireEnv,
 } from "./integrationHarness.js";
@@ -61,24 +62,11 @@ describeProviderIntegration(
       expect(provider).toBeInstanceOf(AnthropicProvider);
       expect(provider.name).toBe("anthropic");
 
-      const assistantText: string[] = [];
-      let terminalStopReason: string | undefined;
-
-      for await (const chunk of provider.streamChat({
+      await expectProviderStreamsAssistantText(provider, {
         model: modelKey,
         messages: [{ role: "user", content: "Reply with exactly: OK" }],
         ...(options.requestReasoning ? { requestReasoning: true } : {}),
-      })) {
-        if (chunk.type === "assistant_text") {
-          assistantText.push(chunk.delta);
-        }
-        if (chunk.type === "terminal") {
-          terminalStopReason = chunk.stopReason;
-        }
-      }
-
-      expect(assistantText.join("")).not.toHaveLength(0);
-      expect(terminalStopReason).toBeDefined();
+      });
     }
 
     it("should smoke test Claude Sonnet", async () => {

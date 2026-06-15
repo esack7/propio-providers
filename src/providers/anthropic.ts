@@ -76,7 +76,8 @@ export class AnthropicProvider extends BaseProvider {
     this.client = new Anthropic({ apiKey });
   }
 
-  // fallow-ignore-next-line complexity
+  // streamChat is called through LLMProvider/factory references, which Fallow cannot trace here.
+  // fallow-ignore-next-line complexity, unused-class-member
   async *streamChat(request: ChatRequest): AsyncIterable<ChatStreamEvent> {
     try {
       const model = request.model || this.model;

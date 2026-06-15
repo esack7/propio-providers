@@ -7,6 +7,7 @@ import { CloudflareProviderConfig } from "../config.js";
 import { CloudflareProvider } from "../providers/cloudflare.js";
 import {
   describeProviderIntegration,
+  expectProviderStreamsAssistantText,
   optionalEnv,
   requireEnv,
 } from "./integrationHarness.js";
@@ -40,23 +41,10 @@ describeProviderIntegration(
       expect(provider).toBeInstanceOf(CloudflareProvider);
       expect(provider.name).toBe("cloudflare");
 
-      const assistantText: string[] = [];
-      let terminalStopReason: string | undefined;
-
-      for await (const chunk of provider.streamChat({
+      await expectProviderStreamsAssistantText(provider, {
         model: DEFAULT_MODEL,
         messages: [{ role: "user", content: "Reply with exactly: OK" }],
-      })) {
-        if (chunk.type === "assistant_text") {
-          assistantText.push(chunk.delta);
-        }
-        if (chunk.type === "terminal") {
-          terminalStopReason = chunk.stopReason;
-        }
-      }
-
-      expect(assistantText.join("").length).toBeGreaterThan(0);
-      expect(terminalStopReason).toBeDefined();
+      });
     }, 30_000);
   },
 );
