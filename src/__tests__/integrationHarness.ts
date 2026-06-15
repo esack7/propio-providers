@@ -1,3 +1,6 @@
+import type { LLMProvider } from "../interface.js";
+import type { ChatRequest } from "../types.js";
+
 export const KNOWN_INTEGRATION_PROVIDERS = [
   "cloudflare",
   "anthropic",
@@ -37,7 +40,7 @@ function isRequirementSatisfied(requirement: EnvRequirement): boolean {
   return vars.some((name) => Boolean(process.env[name]?.trim()));
 }
 
-export function getMissingEnvRequirements(
+function getMissingEnvRequirements(
   requirements: ProviderIntegrationRequirements,
 ): EnvRequirement[] {
   return requirements.env.filter(
@@ -45,7 +48,7 @@ export function getMissingEnvRequirements(
   );
 }
 
-export function formatMissingEnvMessage(
+function formatMissingEnvMessage(
   providerName: IntegrationProvider,
   missing: EnvRequirement[],
 ): string {
@@ -67,7 +70,7 @@ export function getSelectedIntegrationProvider():
   return provider as IntegrationProvider;
 }
 
-export function shouldRunProviderIntegration(
+function shouldRunProviderIntegration(
   providerName: IntegrationProvider,
 ): boolean {
   const selected = getSelectedIntegrationProvider();
@@ -87,19 +90,24 @@ export function optionalEnv(name: string): string | undefined {
   return value || undefined;
 }
 
-export function requireOneOfEnv(names: string[]): {
-  name: string;
-  value: string;
-} {
-  for (const name of names) {
-    const value = process.env[name]?.trim();
-    if (value) {
-      return { name, value };
+export async function expectProviderStreamsAssistantText(
+  provider: Pick<LLMProvider, "streamChat">,
+  request: ChatRequest,
+): Promise<void> {
+  const assistantText: string[] = [];
+  let terminalStopReason: string | undefined;
+
+  for await (const chunk of provider.streamChat(request)) {
+    if ("type" in chunk && chunk.type === "assistant_text") {
+      assistantText.push(chunk.delta);
+    }
+    if ("type" in chunk && chunk.type === "terminal") {
+      terminalStopReason = chunk.stopReason;
     }
   }
-  throw new Error(
-    `Missing required environment variable. Set one of: ${names.join(", ")}`,
-  );
+
+  expect(assistantText.join("")).not.toHaveLength(0);
+  expect(terminalStopReason).toBeDefined();
 }
 
 export function describeProviderIntegration(
