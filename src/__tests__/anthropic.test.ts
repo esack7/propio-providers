@@ -43,6 +43,7 @@ import {
 let AnthropicProvider: any;
 
 const SONNET_46_MODEL = "claude-sonnet-4-6";
+const SONNET_5_MODEL = "claude-sonnet-5";
 const HAIKU_45_MODEL = "claude-haiku-4-5-20251001";
 const OPUS_48_MODEL = "claude-opus-4-8";
 
@@ -459,6 +460,32 @@ describe("AnthropicProvider", () => {
       });
     });
 
+    it("uses adaptive thinking for Sonnet 5 reasoning requests", async () => {
+      mockStream.mockReturnValue(makeStream(thinkingToolCallStreamEvents()));
+      await collectStream(
+        createTestProvider(),
+        createChatRequest("think", {
+          model: SONNET_5_MODEL,
+          requestReasoning: true,
+        }),
+      );
+      const callArgs = mockStream.mock.calls[0][0];
+      expectAdaptiveThinkingRequest(callArgs);
+    });
+
+    it("defaults future models to adaptive thinking", async () => {
+      mockStream.mockReturnValue(makeStream(thinkingToolCallStreamEvents()));
+      await collectStream(
+        createTestProvider(),
+        createChatRequest("think", {
+          model: "claude-sonnet-6",
+          requestReasoning: true,
+        }),
+      );
+      const callArgs = mockStream.mock.calls[0][0];
+      expectAdaptiveThinkingRequest(callArgs);
+    });
+
     it("uses adaptive thinking for Opus 4.8 reasoning requests", async () => {
       mockStream.mockReturnValue(makeStream(thinkingToolCallStreamEvents()));
       await collectStream(
@@ -491,6 +518,23 @@ describe("AnthropicProvider", () => {
           budget_tokens: 10000,
         }),
       );
+      expect(callArgs.output_config).toBeUndefined();
+    });
+
+    it("keeps manual enabled thinking for Sonnet 4.5 reasoning requests", async () => {
+      mockStream.mockReturnValue(makeStream(thinkingToolCallStreamEvents()));
+      await collectStream(
+        createTestProvider(),
+        createChatRequest("think", {
+          model: "claude-sonnet-4-5-20250929",
+          requestReasoning: true,
+        }),
+      );
+      const callArgs = mockStream.mock.calls[0][0];
+      expect(callArgs.thinking).toEqual({
+        type: "enabled",
+        budget_tokens: 10000,
+      });
       expect(callArgs.output_config).toBeUndefined();
     });
 
