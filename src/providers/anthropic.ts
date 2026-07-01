@@ -324,33 +324,31 @@ export class AnthropicProvider extends BaseProvider {
       return { maxTokens: DEFAULT_MAX_TOKENS };
     }
 
-    if (this.usesAdaptiveThinking(model)) {
+    if (this.usesManualThinking(model)) {
+      const thinkingBudget = THINKING_BUDGET_TOKENS;
       return {
-        maxTokens: DEFAULT_MAX_TOKENS,
-        thinking: { type: "adaptive", display: "summarized" },
-        output_config: { effort: "high" },
+        maxTokens: Math.max(
+          thinkingBudget + THINKING_OUTPUT_HEADROOM,
+          DEFAULT_MAX_TOKENS,
+        ),
+        thinking: { type: "enabled", budget_tokens: thinkingBudget },
       };
     }
 
-    const thinkingBudget = THINKING_BUDGET_TOKENS;
     return {
-      maxTokens: Math.max(
-        thinkingBudget + THINKING_OUTPUT_HEADROOM,
-        DEFAULT_MAX_TOKENS,
-      ),
-      thinking: { type: "enabled", budget_tokens: thinkingBudget },
+      maxTokens: DEFAULT_MAX_TOKENS,
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "high" },
     };
   }
 
-  private usesAdaptiveThinking(model: string): boolean {
+  private usesManualThinking(model: string): boolean {
     return (
-      model === "claude-opus-4-8" ||
-      model === "claude-opus-4-7" ||
-      model === "claude-opus-4-6" ||
-      model === "claude-sonnet-4-6" ||
-      model === "claude-fable-5" ||
-      model === "claude-mythos-5" ||
-      model === "claude-mythos-preview"
+      /^claude-(?:instant|[123])(?:-|\.|$)/.test(model) ||
+      /^claude-(?:opus|sonnet)-4(?:$|-(?:[0-5](?:-|$)|20\d{6}(?:-|$)))/.test(
+        model,
+      ) ||
+      /^claude-haiku-4-5(?:-|$)/.test(model)
     );
   }
 
