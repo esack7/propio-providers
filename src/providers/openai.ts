@@ -3,7 +3,6 @@ import type {
   ChatMessage,
   ChatRequest,
   ChatStreamEvent,
-  ChatTool,
   ChatToolCall,
   StopReason,
 } from "../types.js";
@@ -17,11 +16,13 @@ import {
   type OpenAiCompatibleProviderOptions,
 } from "../internal/openAiCompatibleProvider.js";
 import {
+  createResponsesFunctionTool,
   expandToolResultMessages,
   imageToOpenAIUrl,
   parseJsonMaybe,
   parseOpenAIStreamToolCallArguments,
   readSseDataLines,
+  serializeToolArguments,
 } from "../internal/shared.js";
 import { withRetry } from "../internal/withRetry.js";
 
@@ -37,6 +38,13 @@ interface ResponsesFunctionCall {
 interface ResponsesReasoningItem extends Record<string, unknown> {
   type: "reasoning";
 }
+
+type ResponsesReplayItem =
+  | ResponsesReasoningItem
+  | (Record<string, unknown> &
+      ResponsesFunctionCall & {
+        type: "function_call";
+      });
 
 interface ResponsesStreamEvent {
   type?: string;
@@ -55,7 +63,7 @@ interface FunctionCallAccumulator {
 
 interface ResponsesStreamState {
   readonly functionCallsByOutputIndex: Map<number, FunctionCallAccumulator>;
-  readonly reasoningItems: ResponsesReasoningItem[];
+  readonly replayItemsByOutputIndex: Map<number, ResponsesReplayItem>;
   stopReason: StopReason;
 }
 
@@ -119,7 +127,7 @@ export class OpenAiProvider extends OpenAiCompatibleProvider {
     };
 
     if (request.tools?.length) {
-      body.tools = request.tools.map((tool) => this.toolToResponseTool(tool));
+      body.tools = request.tools.map(createResponsesFunctionTool);
     }
 
     if (request.requestReasoning) {
@@ -192,28 +200,38 @@ export class OpenAiProvider extends OpenAiCompatibleProvider {
     message: ChatMessage,
     input: Record<string, unknown>[],
   ): void {
-    input.push(...this.parseReasoningContent(message.reasoningContent));
+    const replayItems = this.parseReplayItems(message.reasoningContent);
+    input.push(...replayItems);
 
     if (message.content) {
       input.push({ role: "assistant", content: message.content });
     }
 
+    const replayedCallIds = new Set(
+      replayItems
+        .filter((item) => item.type === "function_call")
+        .flatMap((item) => [item.call_id, item.id])
+        .filter((id): id is string => typeof id === "string"),
+    );
     for (const toolCall of message.toolCalls ?? []) {
       const callId = toolCall.id ?? `call_${toolCall.function.name}`;
+      if (replayedCallIds.has(callId)) {
+        continue;
+      }
       input.push({
         type: "function_call",
         id: callId,
         call_id: callId,
         name: toolCall.function.name,
-        arguments: this.serializeArguments(toolCall.function.arguments),
+        arguments: serializeToolArguments(toolCall.function.arguments),
         status: "completed",
       });
     }
   }
 
-  private parseReasoningContent(
+  private parseReplayItems(
     reasoningContent: string | undefined,
-  ): ResponsesReasoningItem[] {
+  ): ResponsesReplayItem[] {
     if (!reasoningContent) {
       return [];
     }
@@ -224,29 +242,13 @@ export class OpenAiProvider extends OpenAiCompatibleProvider {
     }
 
     return parsed.filter(
-      (item): item is ResponsesReasoningItem =>
+      (item): item is ResponsesReplayItem =>
         typeof item === "object" &&
         item !== null &&
-        (item as { type?: unknown }).type === "reasoning",
+        ["reasoning", "function_call"].includes(
+          String((item as { type?: unknown }).type),
+        ),
     );
-  }
-
-  private serializeArguments(argumentsValue: unknown): string {
-    return typeof argumentsValue === "string"
-      ? argumentsValue
-      : JSON.stringify(argumentsValue ?? {});
-  }
-
-  private toolToResponseTool(tool: ChatTool): Record<string, unknown> {
-    return {
-      type: "function",
-      name: tool.function.name,
-      description: tool.function.description,
-      parameters: tool.function.parameters ?? {
-        type: "object",
-        properties: {},
-      },
-    };
   }
 
   private async postResponse(
@@ -290,7 +292,7 @@ export class OpenAiProvider extends OpenAiCompatibleProvider {
   ): AsyncIterable<ChatStreamEvent> {
     const state: ResponsesStreamState = {
       functionCallsByOutputIndex: new Map(),
-      reasoningItems: [],
+      replayItemsByOutputIndex: new Map(),
       stopReason: "end_turn",
     };
 
@@ -463,9 +465,14 @@ export class OpenAiProvider extends OpenAiCompatibleProvider {
     event: ResponsesStreamEvent,
     state: ResponsesStreamState,
   ): void {
-    if (event.item?.type === "reasoning") {
-      state.reasoningItems.push(event.item as ResponsesReasoningItem);
-      return;
+    if (
+      event.item?.type === "reasoning" ||
+      event.item?.type === "function_call"
+    ) {
+      state.replayItemsByOutputIndex.set(
+        event.output_index ?? 0,
+        event.item as ResponsesReplayItem,
+      );
     }
     this.captureFunctionCall(event, state, true);
   }
@@ -487,11 +494,16 @@ export class OpenAiProvider extends OpenAiCompatibleProvider {
         },
       }));
 
+    const replayItems = [...state.replayItemsByOutputIndex]
+      .sort(([left], [right]) => left - right)
+      .map(([, item]) => item);
+    const hasReasoning = replayItems.some((item) => item.type === "reasoning");
+
     return {
       type: "tool_calls",
       toolCalls,
-      ...(state.reasoningItems.length
-        ? { reasoningContent: JSON.stringify(state.reasoningItems) }
+      ...(hasReasoning
+        ? { reasoningContent: JSON.stringify(replayItems) }
         : {}),
     };
   }
@@ -525,7 +537,7 @@ export class OpenAiProvider extends OpenAiCompatibleProvider {
         originalError,
       );
     }
-    if (response?.status === 529) {
+    if (response?.status === 503) {
       return new ProviderCapacityError(
         "OpenAI capacity is temporarily exhausted",
         originalError,

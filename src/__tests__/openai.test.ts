@@ -281,9 +281,98 @@ describe("OpenAiProvider", () => {
             function: { name: "lookup", arguments: { query: "value" } },
           },
         ],
-        reasoningContent: JSON.stringify([reasoningItem]),
+        reasoningContent: JSON.stringify([
+          reasoningItem,
+          {
+            type: "function_call",
+            id: "fc_1",
+            call_id: "call_1",
+            name: "lookup",
+            arguments: '{"query":"value"}',
+          },
+        ]),
       });
       expect(events[2]).toEqual({ type: "terminal", stopReason: "tool_use" });
+    });
+
+    it("replays interleaved reasoning and parallel function calls in output order", async () => {
+      globalThis.fetch = jest
+        .fn()
+        .mockResolvedValue(
+          successfulResponse([
+            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+          ]),
+        );
+      const replayItems = [
+        {
+          type: "reasoning",
+          id: "rs_1",
+          encrypted_content: "first",
+          summary: [],
+        },
+        {
+          type: "function_call",
+          id: "fc_1",
+          call_id: "call_1",
+          name: "lookup",
+          arguments: '{"query":"first"}',
+          status: "completed",
+        },
+        {
+          type: "reasoning",
+          id: "rs_2",
+          encrypted_content: "second",
+          summary: [],
+        },
+        {
+          type: "function_call",
+          id: "fc_2",
+          call_id: "call_2",
+          name: "lookup",
+          arguments: '{"query":"second"}',
+          status: "completed",
+        },
+      ];
+
+      await collectEvents(createProvider(), {
+        model: "gpt-5.5",
+        messages: [
+          { role: "user", content: "Look up both" },
+          {
+            role: "assistant",
+            content: "",
+            reasoningContent: JSON.stringify(replayItems),
+            toolCalls: [
+              {
+                id: "call_1",
+                function: { name: "lookup", arguments: { query: "first" } },
+              },
+              {
+                id: "call_2",
+                function: { name: "lookup", arguments: { query: "second" } },
+              },
+            ],
+          },
+          { role: "tool", content: "first result", toolCallId: "call_1" },
+          { role: "tool", content: "second result", toolCallId: "call_2" },
+        ],
+      });
+
+      const body = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
+      expect(body.input).toEqual([
+        { role: "user", content: "Look up both" },
+        ...replayItems,
+        {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: "first result",
+        },
+        {
+          type: "function_call_output",
+          call_id: "call_2",
+          output: "second result",
+        },
+      ]);
     });
 
     it("passes arbitrary future model IDs through unchanged", async () => {
@@ -364,7 +453,7 @@ describe("OpenAiProvider", () => {
         ProviderContextLengthError,
       );
       await expectStreamError(
-        { ok: false, status: 529 },
+        { ok: false, status: 503 },
         ProviderCapacityError,
       );
     });
