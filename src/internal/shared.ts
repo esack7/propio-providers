@@ -130,8 +130,23 @@ export function createProviderRetryOptions(options: {
   return retryOptions;
 }
 
-function serializeToolArguments(args: unknown): string {
+export function serializeToolArguments(args: unknown): string {
   return typeof args === "string" ? args : JSON.stringify(args ?? {});
+}
+
+/** Map a normalized tool to the flat function shape used by Responses APIs. */
+export function createResponsesFunctionTool(
+  tool: ChatTool,
+): Record<string, unknown> {
+  return {
+    type: "function",
+    name: tool.function.name,
+    description: tool.function.description,
+    parameters: tool.function.parameters ?? {
+      type: "object",
+      properties: {},
+    },
+  };
 }
 
 export function accumulateOpenAIStreamToolCall<
@@ -292,7 +307,7 @@ export function createOpenAIMessageWithImages<T extends OpenAIMessageCore>(
   return out;
 }
 
-function imageToOpenAIUrl(image: Uint8Array | string): string {
+export function imageToOpenAIUrl(image: Uint8Array | string): string {
   if (typeof image === "string") {
     if (image.startsWith("data:")) {
       return image;

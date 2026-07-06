@@ -88,6 +88,14 @@ export interface AnthropicProviderConfig extends BaseProviderConfig {
 }
 
 /**
+ * OpenAI provider configuration using the Responses API.
+ */
+export interface OpenAiProviderConfig extends BaseProviderConfig {
+  type: "openai";
+  apiKey?: string;
+}
+
+/**
  * Configuration for a single LLM provider (discriminated union)
  */
 export type ProviderConfig =
@@ -97,7 +105,8 @@ export type ProviderConfig =
   | GeminiProviderConfig
   | XaiProviderConfig
   | CloudflareProviderConfig
-  | AnthropicProviderConfig;
+  | AnthropicProviderConfig
+  | OpenAiProviderConfig;
 
 /**
  * Multi-provider configuration

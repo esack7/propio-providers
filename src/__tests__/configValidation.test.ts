@@ -52,6 +52,29 @@ describe("Configuration Validation", () => {
 
       expect(validateProvidersConfig(config)).toEqual(config);
     });
+
+    it("should validate a data-driven OpenAI model configuration", () => {
+      const config: ProvidersConfig = {
+        default: "openai",
+        providers: [
+          {
+            name: "openai",
+            type: "openai",
+            models: [
+              {
+                name: "GPT Future",
+                key: "gpt-future-general",
+                contextWindowTokens: 2_000_000,
+              },
+            ],
+            defaultModel: "gpt-future-general",
+            apiKey: "openai-test-key",
+          },
+        ],
+      };
+
+      expect(validateProvidersConfig(config)).toEqual(config);
+    });
   });
 
   describe("resolveProvider()", () => {

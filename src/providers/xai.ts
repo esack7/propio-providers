@@ -12,10 +12,12 @@ import type { ProviderDiagnosticListener } from "../diagnostics.js";
 import { withRetry } from "../internal/withRetry.js";
 import {
   buildOpenAIChatCompletionRequestBody,
+  createResponsesFunctionTool,
   expandToolResultMessages,
   parseJsonMaybe,
   parseOpenAIStreamToolCallArguments,
   readSseDataLines,
+  serializeToolArguments,
   type OpenAIStreamToolCallAccumulator,
 } from "../internal/shared.js";
 import { consumeOpenAiChatCompletionsStream } from "../internal/openAiStream.js";
@@ -218,28 +220,10 @@ export class XaiProvider extends OpenAiCompatibleProvider {
     };
 
     if (request.tools && request.tools.length > 0) {
-      body.tools = request.tools.map((tool) =>
-        this.chatToolToResponsesTool(tool),
-      );
+      body.tools = request.tools.map(createResponsesFunctionTool);
     }
 
     return body;
-  }
-
-  private chatToolToResponsesTool(tool: ChatTool): Record<string, unknown> {
-    return {
-      type: "function",
-      name: tool.function.name,
-      description: tool.function.description,
-      parameters: tool.function.parameters ?? {
-        type: "object",
-        properties: {},
-      },
-    };
-  }
-
-  private serializeToolArguments(args: unknown): string {
-    return typeof args === "string" ? args : JSON.stringify(args ?? {});
   }
 
   private chatMessagesToResponsesInput(
@@ -317,7 +301,7 @@ export class XaiProvider extends OpenAiCompatibleProvider {
         id: callId,
         call_id: callId,
         name: toolCall.function.name,
-        arguments: this.serializeToolArguments(toolCall.function.arguments),
+        arguments: serializeToolArguments(toolCall.function.arguments),
         status: "completed",
       });
     }

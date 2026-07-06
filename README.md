@@ -1,6 +1,6 @@
 # @propio-ai/providers
 
-Provider adapters for LLM APIs with a unified streaming chat interface. Supports Anthropic (Claude), AWS Bedrock, Ollama, OpenRouter, Google Gemini, xAI (Grok), and Cloudflare Workers AI.
+Provider adapters for LLM APIs with a unified streaming chat interface. Supports Anthropic (Claude), AWS Bedrock, Ollama, OpenRouter, OpenAI, Google Gemini, xAI (Grok), and Cloudflare Workers AI.
 
 Extracted from [propio-agent](https://github.com/esack7/propio-agent), which uses it as its provider layer.
 
@@ -40,6 +40,42 @@ for await (const event of provider.streamChat({
   }
 }
 ```
+
+### OpenAI
+
+The first-party OpenAI provider uses the Responses API. Supply an API key directly or set `OPENAI_API_KEY`:
+
+```ts
+import { createProvider } from "@propio-ai/providers";
+
+const openai = createProvider({
+  name: "openai",
+  type: "openai",
+  models: [
+    {
+      name: "GPT-5.5",
+      key: "gpt-5.5",
+      contextWindowTokens: 1_050_000,
+    },
+    {
+      name: "GPT-5.4",
+      key: "gpt-5.4",
+      contextWindowTokens: 1_050_000,
+    },
+    {
+      name: "GPT-5.4 mini",
+      key: "gpt-5.4-mini",
+      contextWindowTokens: 400_000,
+    },
+  ],
+  defaultModel: "gpt-5.5",
+  apiKey: process.env.OPENAI_API_KEY,
+});
+```
+
+Model support is configuration-driven. To adopt a newly generally available model, add its model ID, display name, and documented context window to `models`, then optionally select it as `defaultModel`. The provider does not contain a model-name allowlist or version-specific routing. Check [OpenAI's model catalog](https://developers.openai.com/api/docs/models) for current IDs and limits before changing configuration.
+
+The provider streams assistant text, function calls, and OpenAI-provided reasoning summaries through the shared event contract. Tool-call continuation preserves encrypted OpenAI reasoning state internally; raw chain-of-thought is never exposed as an event.
 
 ## API
 
