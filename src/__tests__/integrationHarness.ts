@@ -9,6 +9,7 @@ export const KNOWN_INTEGRATION_PROVIDERS = [
   "openrouter",
   "gemini",
   "xai",
+  "openai",
 ] as const;
 
 export type IntegrationProvider = (typeof KNOWN_INTEGRATION_PROVIDERS)[number];

@@ -9,6 +9,7 @@ import {
   XaiProviderConfig,
   CloudflareProviderConfig,
   AnthropicProviderConfig,
+  OpenAiProviderConfig,
 } from "../config.js";
 import { OllamaProvider } from "../providers/ollama.js";
 import { BedrockProvider } from "../providers/bedrock.js";
@@ -17,6 +18,7 @@ import { GeminiProvider } from "../providers/gemini.js";
 import { XaiProvider } from "../providers/xai.js";
 import { CloudflareProvider } from "../providers/cloudflare.js";
 import { AnthropicProvider } from "../providers/anthropic.js";
+import { OpenAiProvider } from "../providers/openai.js";
 
 describe("Provider Factory", () => {
   describe("createProvider", () => {
@@ -153,9 +155,50 @@ describe("Provider Factory", () => {
         defaultModel: "test",
       };
 
-      expect(() => createProvider(config)).toThrow(
-        /ollama.*bedrock|bedrock.*ollama|openrouter|gemini|xai|cloudflare/,
-      );
+      expect(() => createProvider(config)).toThrow(/openai/);
+    });
+
+    it("should create OpenAiProvider from openai config", () => {
+      const config: OpenAiProviderConfig = {
+        name: "openai",
+        type: "openai",
+        models: [
+          {
+            name: "GPT-5.5",
+            key: "gpt-5.5",
+            contextWindowTokens: 1_050_000,
+          },
+        ],
+        defaultModel: "gpt-5.5",
+        apiKey: "openai-test-key",
+      };
+
+      const provider = createProvider(config);
+
+      expect(provider).toBeInstanceOf(OpenAiProvider);
+      expect(provider.name).toBe("openai");
+      expect(provider.getCapabilities().contextWindowTokens).toBe(1_050_000);
+    });
+
+    it("should create arbitrary configured future OpenAI models", () => {
+      const config: OpenAiProviderConfig = {
+        name: "openai",
+        type: "openai",
+        models: [
+          {
+            name: "GPT Future",
+            key: "gpt-future-general",
+            contextWindowTokens: 2_000_000,
+          },
+        ],
+        defaultModel: "gpt-future-general",
+        apiKey: "openai-test-key",
+      };
+
+      const provider = createProvider(config);
+
+      expect(provider).toBeInstanceOf(OpenAiProvider);
+      expect(provider.getCapabilities().contextWindowTokens).toBe(2_000_000);
     });
 
     it("should create XaiProvider from xai config", () => {

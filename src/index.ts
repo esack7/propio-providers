@@ -44,6 +44,7 @@ export type {
   CloudflareProviderConfig,
   GeminiProviderConfig,
   AnthropicProviderConfig,
+  OpenAiProviderConfig,
   ProviderConfig,
   ProvidersConfig,
 } from "./config.js";

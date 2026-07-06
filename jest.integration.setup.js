@@ -1,3 +1,4 @@
+// fallow-ignore-file unused-file -- Loaded indirectly by Jest's setupFiles configuration.
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -13,6 +14,7 @@ const KNOWN_PROVIDERS = [
   "openrouter",
   "gemini",
   "xai",
+  "openai",
 ];
 
 const provider = process.env.PROVIDER?.trim().toLowerCase();

@@ -292,7 +292,7 @@ export function createOpenAIMessageWithImages<T extends OpenAIMessageCore>(
   return out;
 }
 
-function imageToOpenAIUrl(image: Uint8Array | string): string {
+export function imageToOpenAIUrl(image: Uint8Array | string): string {
   if (typeof image === "string") {
     if (image.startsWith("data:")) {
       return image;
