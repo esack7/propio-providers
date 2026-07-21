@@ -12,6 +12,7 @@ import {
   ProviderError,
   ProviderAuthenticationError,
   ProviderContextLengthError,
+  ProviderInvalidRequestError,
   ProviderModelNotFoundError,
   ProviderRateLimitError,
 } from "../types.js";
@@ -175,6 +176,13 @@ export abstract class OpenAiCompatibleProvider implements LLMProvider {
       );
     }
 
+    if (response.status === 400) {
+      return new ProviderInvalidRequestError(
+        normalizedMessage || "Invalid request",
+        originalError,
+      );
+    }
+
     if (response.status === 401) {
       return new ProviderAuthenticationError(
         options.authenticationMessage,
@@ -216,6 +224,7 @@ export abstract class OpenAiCompatibleProvider implements LLMProvider {
   protected isRetryableError(err: unknown): boolean {
     if (err instanceof ProviderAuthenticationError) return false;
     if (err instanceof ProviderContextLengthError) return false;
+    if (err instanceof ProviderInvalidRequestError) return false;
     if (err instanceof ProviderModelNotFoundError) return false;
     return err instanceof ProviderError;
   }

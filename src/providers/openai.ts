@@ -220,7 +220,6 @@ export class OpenAiProvider extends OpenAiCompatibleProvider {
       }
       input.push({
         type: "function_call",
-        id: callId,
         call_id: callId,
         name: toolCall.function.name,
         arguments: serializeToolArguments(toolCall.function.arguments),
@@ -497,12 +496,10 @@ export class OpenAiProvider extends OpenAiCompatibleProvider {
     const replayItems = [...state.replayItemsByOutputIndex]
       .sort(([left], [right]) => left - right)
       .map(([, item]) => item);
-    const hasReasoning = replayItems.some((item) => item.type === "reasoning");
-
     return {
       type: "tool_calls",
       toolCalls,
-      ...(hasReasoning
+      ...(replayItems.length
         ? { reasoningContent: JSON.stringify(replayItems) }
         : {}),
     };

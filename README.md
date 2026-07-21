@@ -101,7 +101,7 @@ The provider streams assistant text, function calls, and OpenAI-provided reasoni
 
 ### Errors
 
-`ProviderError` and subclasses `ProviderAuthenticationError`, `ProviderRateLimitError`, `ProviderCapacityError`, `ProviderModelNotFoundError`, `ProviderContextLengthError`.
+`ProviderError` and subclasses `ProviderAuthenticationError`, `ProviderRateLimitError`, `ProviderCapacityError`, `ProviderModelNotFoundError`, `ProviderContextLengthError`, `ProviderInvalidRequestError`.
 
 ### Diagnostics
 

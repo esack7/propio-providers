@@ -224,3 +224,14 @@ export class ProviderContextLengthError extends ProviderError {
     this.name = "ProviderContextLengthError";
   }
 }
+
+/**
+ * Invalid request error. Thrown when a provider rejects a request that cannot
+ * succeed without changing its input, such as a malformed API payload.
+ */
+export class ProviderInvalidRequestError extends ProviderError {
+  constructor(message: string, originalError?: Error) {
+    super(message, originalError);
+    this.name = "ProviderInvalidRequestError";
+  }
+}
