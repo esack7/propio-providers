@@ -3,6 +3,7 @@ import {
   ProviderAuthenticationError,
   ProviderContextLengthError,
   ProviderError,
+  ProviderInvalidRequestError,
   ProviderModelNotFoundError,
   ProviderRateLimitError,
 } from "../types.js";
@@ -249,7 +250,7 @@ export function registerOpenAiCompatibleStreamErrorTests<
     );
   });
 
-  it("should throw generic ProviderError on 400 without context length message", async () => {
+  it("should not retry invalid 400 requests", async () => {
     globalThis.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 400,
@@ -260,13 +261,16 @@ export function registerOpenAiCompatibleStreamErrorTests<
     });
 
     const provider = options.createProvider({
-      retryConfig: { maxRetries: 0, consecutive529Limit: 1 },
+      retryConfig: {
+        maxRetries: 1,
+        consecutive529Limit: 1,
+        baseDelayMs: 0,
+      },
     } as Partial<TOptions>);
-    await options.expectStreamChatToThrow(provider, ProviderError);
-    await expect(async () => {
-      for await (const _chunk of provider.streamChat(options.defaultRequest)) {
-        // consume
-      }
-    }).rejects.not.toThrow(ProviderContextLengthError);
+    await options.expectStreamChatToThrow(
+      provider,
+      ProviderInvalidRequestError,
+    );
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 }

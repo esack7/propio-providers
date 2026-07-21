@@ -496,6 +496,10 @@ export class OpenAiProvider extends OpenAiCompatibleProvider {
     const replayItems = [...state.replayItemsByOutputIndex]
       .sort(([left], [right]) => left - right)
       .map(([, item]) => item);
+
+    // The Responses API requires its prior function_call items to be replayed
+    // unchanged. reasoningContent is provider-private continuation state, not
+    // user-visible thinking, so it also carries these opaque output items.
     return {
       type: "tool_calls",
       toolCalls,

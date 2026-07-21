@@ -14,8 +14,9 @@ export interface ChatMessage {
   role: "user" | "assistant" | "system" | "tool";
   content: string;
   /**
-   * Provider-specific reasoning state that some thinking models require to be
-   * replayed during tool-call loops. It is not rendered to users.
+   * Provider-private continuation state required to replay a tool-call loop.
+   * This commonly contains reasoning state, but may also contain opaque
+   * provider output items. It is never rendered to users.
    */
   reasoningContent?: string;
   toolCalls?: ChatToolCall[];

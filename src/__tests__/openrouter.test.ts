@@ -5,6 +5,7 @@ import {
   ProviderModelNotFoundError,
   ProviderContextLengthError,
   ProviderError,
+  ProviderInvalidRequestError,
 } from "../types.js";
 import { ChatRequest, ChatMessage } from "../types.js";
 import { ProviderDiagnosticEvent } from "../diagnostics.js";
@@ -924,7 +925,7 @@ describe("OpenRouterProvider", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
-    it("should throw generic ProviderError on 400 without context length message", async () => {
+    it("should not retry invalid 400 requests", async () => {
       const fetchMock = jest.fn().mockResolvedValue({
         ok: false,
         status: 400,
@@ -936,23 +937,17 @@ describe("OpenRouterProvider", () => {
       globalThis.fetch = fetchMock;
 
       const provider = createProvider("openai/gpt-3.5-turbo", "sk-test", {
-        maxRetries: 0,
+        maxRetries: 3,
         baseDelayMs: 0,
         consecutive529Limit: 3,
       });
       const request = OpenRouterTestFixture.createRequest();
       await OpenRouterTestFixture.expectStreamChatToThrow(
         provider,
-        ProviderError,
+        ProviderInvalidRequestError,
         request,
       );
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      await expect(async () => {
-        for await (const _chunk of provider.streamChat(request)) {
-          // consume
-        }
-      }).rejects.not.toThrow(ProviderContextLengthError);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
   });
 

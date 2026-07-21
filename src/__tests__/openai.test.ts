@@ -362,6 +362,51 @@ describe("OpenAiProvider", () => {
       ]);
     });
 
+    it("omits the Responses item id for legacy tool-call history", async () => {
+      globalThis.fetch = jest
+        .fn()
+        .mockResolvedValue(
+          successfulResponse([
+            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+          ]),
+        );
+
+      await collectEvents(createProvider(), {
+        model: "gpt-5.5",
+        messages: [
+          { role: "user", content: "Look this up" },
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [
+              {
+                id: "call_legacy",
+                function: { name: "lookup", arguments: { query: "value" } },
+              },
+            ],
+          },
+          { role: "tool", content: "result", toolCallId: "call_legacy" },
+        ],
+      });
+
+      const body = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
+      expect(body.input).toEqual([
+        { role: "user", content: "Look this up" },
+        {
+          type: "function_call",
+          call_id: "call_legacy",
+          name: "lookup",
+          arguments: '{"query":"value"}',
+          status: "completed",
+        },
+        {
+          type: "function_call_output",
+          call_id: "call_legacy",
+          output: "result",
+        },
+      ]);
+    });
+
     it("replays interleaved reasoning and parallel function calls in output order", async () => {
       globalThis.fetch = jest
         .fn()
