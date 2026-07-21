@@ -101,7 +101,7 @@ The provider streams assistant text, function calls, and OpenAI-provided reasoni
 
 ### Errors
 
-`ProviderError` and subclasses `ProviderAuthenticationError`, `ProviderRateLimitError`, `ProviderCapacityError`, `ProviderModelNotFoundError`, `ProviderContextLengthError`.
+`ProviderError` and subclasses `ProviderAuthenticationError`, `ProviderRateLimitError`, `ProviderCapacityError`, `ProviderModelNotFoundError`, `ProviderContextLengthError`, `ProviderInvalidRequestError`. A non-context-length HTTP 400 is reported as `ProviderInvalidRequestError` and is not retried by OpenAI-compatible providers or OpenRouter.
 
 ### Diagnostics
 

@@ -8,6 +8,7 @@ import {
   ProviderModelNotFoundError,
   ProviderContextLengthError,
   ProviderCapacityError,
+  ProviderInvalidRequestError,
 } from "../types.js";
 import {
   accumulateOpenAIStreamToolCall,
@@ -836,6 +837,11 @@ export class OpenRouterProvider extends OpenAiCompatibleProvider {
     originalError: Error,
   ): ProviderError | null {
     switch (response.status) {
+      case 400:
+        return new ProviderInvalidRequestError(
+          originalError.message || "Invalid request",
+          originalError,
+        );
       case 401:
         return new ProviderAuthenticationError(
           "Invalid OpenRouter API key",

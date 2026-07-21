@@ -1,10 +1,14 @@
 import { OpenAiProvider } from "../providers/openai.js";
-import type { ChatRequest, ChatStreamEvent } from "../types.js";
+import type {
+  ChatRequest,
+  ChatStreamEvent,
+  ToolCallsStreamEvent,
+} from "../types.js";
 import {
   ProviderAuthenticationError,
   ProviderCapacityError,
   ProviderContextLengthError,
-  ProviderError,
+  ProviderInvalidRequestError,
   ProviderModelNotFoundError,
   ProviderRateLimitError,
 } from "../types.js";
@@ -232,7 +236,6 @@ describe("OpenAiProvider", () => {
         reasoningItem,
         {
           type: "function_call",
-          id: "call_1",
           call_id: "call_1",
           name: "lookup",
           arguments: '{"query":"value"}',
@@ -293,6 +296,115 @@ describe("OpenAiProvider", () => {
         ]),
       });
       expect(events[2]).toEqual({ type: "terminal", stopReason: "tool_use" });
+    });
+
+    it("replays function calls without reasoning items", async () => {
+      const functionCallItem = {
+        type: "function_call",
+        id: "fc_1",
+        call_id: "call_1",
+        name: "lookup",
+        arguments: '{"query":"value"}',
+        status: "completed",
+      };
+      globalThis.fetch = jest
+        .fn()
+        .mockResolvedValue(
+          successfulResponse([
+            `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: functionCallItem })}\n\n`,
+            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+          ]),
+        );
+
+      const events = await collectEvents(createProvider());
+      const toolCallsEvent = events[0] as ToolCallsStreamEvent;
+      expect(toolCallsEvent).toEqual({
+        type: "tool_calls",
+        toolCalls: [
+          {
+            id: "call_1",
+            function: { name: "lookup", arguments: { query: "value" } },
+          },
+        ],
+        reasoningContent: JSON.stringify([functionCallItem]),
+      });
+
+      globalThis.fetch = jest
+        .fn()
+        .mockResolvedValue(
+          successfulResponse([
+            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+          ]),
+        );
+      await collectEvents(createProvider(), {
+        model: "gpt-5.5",
+        messages: [
+          { role: "user", content: "Look this up" },
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: toolCallsEvent.toolCalls,
+            reasoningContent: toolCallsEvent.reasoningContent,
+          },
+          { role: "tool", content: "result", toolCallId: "call_1" },
+        ],
+      });
+
+      const body = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
+      expect(body.input).toEqual([
+        { role: "user", content: "Look this up" },
+        functionCallItem,
+        {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: "result",
+        },
+      ]);
+    });
+
+    it("omits the Responses item id for legacy tool-call history", async () => {
+      globalThis.fetch = jest
+        .fn()
+        .mockResolvedValue(
+          successfulResponse([
+            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+          ]),
+        );
+
+      await collectEvents(createProvider(), {
+        model: "gpt-5.5",
+        messages: [
+          { role: "user", content: "Look this up" },
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [
+              {
+                id: "call_legacy",
+                function: { name: "lookup", arguments: { query: "value" } },
+              },
+            ],
+          },
+          { role: "tool", content: "result", toolCallId: "call_legacy" },
+        ],
+      });
+
+      const body = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
+      expect(body.input).toEqual([
+        { role: "user", content: "Look this up" },
+        {
+          type: "function_call",
+          call_id: "call_legacy",
+          name: "lookup",
+          arguments: '{"query":"value"}',
+          status: "completed",
+        },
+        {
+          type: "function_call_output",
+          call_id: "call_legacy",
+          output: "result",
+        },
+      ]);
     });
 
     it("replays interleaved reasoning and parallel function calls in output order", async () => {
@@ -509,16 +621,20 @@ describe("OpenAiProvider", () => {
       expect(fetch).toHaveBeenCalledTimes(1);
     });
 
-    it("maps unknown request failures to ProviderError", async () => {
+    it("does not retry invalid requests", async () => {
       globalThis.fetch = jest.fn().mockResolvedValue({
         ok: false,
         status: 400,
         text: async () =>
           JSON.stringify({ error: { message: "Invalid request" } }),
       });
-      await expect(collectEvents(createProvider())).rejects.toThrow(
-        ProviderError,
+      const provider = createProvider({
+        retryConfig: { maxRetries: 3, consecutive529Limit: 2, baseDelayMs: 0 },
+      });
+      await expect(collectEvents(provider)).rejects.toThrow(
+        ProviderInvalidRequestError,
       );
+      expect(fetch).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -3,6 +3,7 @@ import {
   ProviderAuthenticationError,
   ProviderContextLengthError,
   ProviderError,
+  ProviderInvalidRequestError,
   ProviderModelNotFoundError,
   ProviderRateLimitError,
 } from "../types.js";
@@ -579,6 +580,30 @@ describe("GeminiProvider", () => {
             }),
         });
       }, ProviderContextLengthError);
+    });
+
+    it("should not retry invalid 400 requests", async () => {
+      const fetchMock = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        headers: new Headers(),
+        text: async () =>
+          JSON.stringify({ error: { message: "Invalid request format" } }),
+      });
+      globalThis.fetch = fetchMock;
+      const provider = createGeminiProvider({
+        retryConfig: { maxRetries: 1, consecutive529Limit: 1, baseDelayMs: 0 },
+      });
+
+      await expect(async () => {
+        for await (const _chunk of provider.streamChat({
+          model: "gemini-3.1-pro-preview",
+          messages: [{ role: "user", content: "Hi" }],
+        })) {
+          // consume
+        }
+      }).rejects.toThrow(ProviderInvalidRequestError);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
 
     it("should translate network failures into ProviderError", async () => {

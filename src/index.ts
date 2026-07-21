@@ -12,6 +12,7 @@ export {
   ProviderCapacityError,
   ProviderModelNotFoundError,
   ProviderContextLengthError,
+  ProviderInvalidRequestError,
 } from "./types.js";
 export type {
   ToolResult,

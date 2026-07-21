@@ -220,7 +220,6 @@ export class OpenAiProvider extends OpenAiCompatibleProvider {
       }
       input.push({
         type: "function_call",
-        id: callId,
         call_id: callId,
         name: toolCall.function.name,
         arguments: serializeToolArguments(toolCall.function.arguments),
@@ -497,12 +496,14 @@ export class OpenAiProvider extends OpenAiCompatibleProvider {
     const replayItems = [...state.replayItemsByOutputIndex]
       .sort(([left], [right]) => left - right)
       .map(([, item]) => item);
-    const hasReasoning = replayItems.some((item) => item.type === "reasoning");
 
+    // The Responses API requires its prior function_call items to be replayed
+    // unchanged. reasoningContent is provider-private continuation state, not
+    // user-visible thinking, so it also carries these opaque output items.
     return {
       type: "tool_calls",
       toolCalls,
-      ...(hasReasoning
+      ...(replayItems.length
         ? { reasoningContent: JSON.stringify(replayItems) }
         : {}),
     };
