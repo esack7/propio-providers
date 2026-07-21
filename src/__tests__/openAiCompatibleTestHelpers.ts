@@ -87,7 +87,7 @@ export function registerOpenAiCompatibleToolResultExpansionTest(options: {
   });
 }
 
-export function createOpenAiCompatibleProviderTestHelpers<
+function createOpenAiCompatibleProviderTestHelpers<
   TProvider extends OpenAiCompatibleStreamingProvider,
   TOptions = Record<string, unknown>,
 >(config: {
