@@ -10,6 +10,7 @@ export const KNOWN_INTEGRATION_PROVIDERS = [
   "gemini",
   "xai",
   "openai",
+  "meta",
 ] as const;
 
 export type IntegrationProvider = (typeof KNOWN_INTEGRATION_PROVIDERS)[number];

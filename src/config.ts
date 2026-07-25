@@ -96,6 +96,14 @@ export interface OpenAiProviderConfig extends BaseProviderConfig {
 }
 
 /**
+ * Meta Model API provider configuration using the Responses API.
+ */
+export interface MetaProviderConfig extends BaseProviderConfig {
+  type: "meta";
+  apiKey?: string;
+}
+
+/**
  * Configuration for a single LLM provider (discriminated union)
  */
 export type ProviderConfig =
@@ -106,7 +114,8 @@ export type ProviderConfig =
   | XaiProviderConfig
   | CloudflareProviderConfig
   | AnthropicProviderConfig
-  | OpenAiProviderConfig;
+  | OpenAiProviderConfig
+  | MetaProviderConfig;
 
 /**
  * Multi-provider configuration

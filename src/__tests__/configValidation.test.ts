@@ -75,6 +75,29 @@ describe("Configuration Validation", () => {
 
       expect(validateProvidersConfig(config)).toEqual(config);
     });
+
+    it("should validate a data-driven Meta model configuration", () => {
+      const config: ProvidersConfig = {
+        default: "meta",
+        providers: [
+          {
+            name: "meta",
+            type: "meta",
+            models: [
+              {
+                name: "Muse Spark 1.1",
+                key: "muse-spark-1.1",
+                contextWindowTokens: 1_048_576,
+              },
+            ],
+            defaultModel: "muse-spark-1.1",
+            apiKey: "meta-test-key",
+          },
+        ],
+      };
+
+      expect(validateProvidersConfig(config)).toEqual(config);
+    });
   });
 
   describe("resolveProvider()", () => {

@@ -10,6 +10,7 @@ import {
   CloudflareProviderConfig,
   AnthropicProviderConfig,
   OpenAiProviderConfig,
+  MetaProviderConfig,
 } from "../config.js";
 import { OllamaProvider } from "../providers/ollama.js";
 import { BedrockProvider } from "../providers/bedrock.js";
@@ -19,6 +20,7 @@ import { XaiProvider } from "../providers/xai.js";
 import { CloudflareProvider } from "../providers/cloudflare.js";
 import { AnthropicProvider } from "../providers/anthropic.js";
 import { OpenAiProvider } from "../providers/openai.js";
+import { MetaProvider } from "../providers/meta.js";
 
 describe("Provider Factory", () => {
   describe("createProvider", () => {
@@ -198,6 +200,49 @@ describe("Provider Factory", () => {
       const provider = createProvider(config);
 
       expect(provider).toBeInstanceOf(OpenAiProvider);
+      expect(provider.getCapabilities().contextWindowTokens).toBe(2_000_000);
+    });
+
+    it("should create MetaProvider from config", () => {
+      const config: MetaProviderConfig = {
+        name: "meta",
+        type: "meta",
+        models: [
+          {
+            name: "Muse Spark 1.1",
+            key: "muse-spark-1.1",
+            contextWindowTokens: 1_048_576,
+          },
+        ],
+        defaultModel: "muse-spark-1.1",
+        apiKey: "meta-test-key",
+      };
+
+      const provider = createProvider(config);
+
+      expect(provider).toBeInstanceOf(MetaProvider);
+      expect(provider.name).toBe("meta");
+      expect(provider.getCapabilities().contextWindowTokens).toBe(1_048_576);
+    });
+
+    it("should create arbitrary configured future Meta models", () => {
+      const config: MetaProviderConfig = {
+        name: "meta",
+        type: "meta",
+        models: [
+          {
+            name: "Muse Future",
+            key: "muse-future",
+            contextWindowTokens: 2_000_000,
+          },
+        ],
+        defaultModel: "muse-future",
+        apiKey: "meta-test-key",
+      };
+
+      const provider = createProvider(config);
+
+      expect(provider).toBeInstanceOf(MetaProvider);
       expect(provider.getCapabilities().contextWindowTokens).toBe(2_000_000);
     });
 
