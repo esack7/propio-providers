@@ -1,6 +1,6 @@
 # @propio-ai/providers
 
-Provider adapters for LLM APIs with a unified streaming chat interface. Supports Anthropic (Claude), AWS Bedrock, Ollama, OpenRouter, OpenAI, Google Gemini, xAI (Grok), and Cloudflare Workers AI.
+Provider adapters for LLM APIs with a unified streaming chat interface. Supports Anthropic (Claude), AWS Bedrock, Ollama, OpenRouter, OpenAI, Meta Model API, Google Gemini, xAI (Grok), and Cloudflare Workers AI.
 
 Extracted from [propio-agent](https://github.com/esack7/propio-agent), which uses it as its provider layer.
 
@@ -76,6 +76,32 @@ const openai = createProvider({
 Model support is configuration-driven. To adopt a newly generally available model, add its model ID, display name, and documented context window to `models`, then optionally select it as `defaultModel`. The provider does not contain a model-name allowlist or version-specific routing. Check [OpenAI's model catalog](https://developers.openai.com/api/docs/models) for current IDs and limits before changing configuration.
 
 The provider streams assistant text, function calls, and OpenAI-provided reasoning summaries through the shared event contract. Tool-call continuation preserves encrypted OpenAI reasoning state internally; raw chain-of-thought is never exposed as an event.
+
+### Meta Model API
+
+The Meta provider uses Meta's OpenAI-compatible Responses API. Supply an API key directly or set `META_API_KEY`:
+
+```ts
+import { createProvider } from "@propio-ai/providers";
+
+const meta = createProvider({
+  name: "meta",
+  type: "meta",
+  models: [
+    {
+      name: "Muse Spark 1.1",
+      key: "muse-spark-1.1",
+      contextWindowTokens: 1_048_576,
+    },
+  ],
+  defaultModel: "muse-spark-1.1",
+  apiKey: process.env.META_API_KEY,
+});
+```
+
+Meta requests stream from `https://api.meta.ai/v1/responses` without server-side response storage. Encrypted reasoning and completed output items are preserved internally so tool-call turns can be replayed in provider order. Model support remains configuration-driven; future Meta model IDs do not require a library update.
+
+The provider reads only the namespaced `META_API_KEY` environment variable; it does not fall back to the generic `MODEL_API_KEY`. Meta continuation state can include completed assistant commentary items, so `reasoningContent` may contain plaintext user-visible commentary in addition to opaque reasoning and function-call state. Applications that persist `reasoningContent` should protect it as conversation content.
 
 ## API
 

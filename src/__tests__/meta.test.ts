@@ -1,9 +1,5 @@
-import { OpenAiProvider } from "../providers/openai.js";
-import type {
-  ChatRequest,
-  ChatStreamEvent,
-  ToolCallsStreamEvent,
-} from "../types.js";
+import { MetaProvider } from "../providers/meta.js";
+import type { ChatRequest, ChatStreamEvent } from "../types.js";
 import {
   ProviderAuthenticationError,
   ProviderCapacityError,
@@ -15,21 +11,22 @@ import {
 import { OpenRouterTestFixture } from "./openrouterTestHelpers.js";
 
 const DEFAULT_REQUEST: ChatRequest = {
-  model: "gpt-5.5",
+  model: "muse-spark-1.1",
   messages: [{ role: "user", content: "Hello" }],
 };
 
 const originalFetch = globalThis.fetch;
-const originalApiKey = process.env.OPENAI_API_KEY;
+const originalApiKey = process.env.META_API_KEY;
+const originalGenericApiKey = process.env.MODEL_API_KEY;
 const createSseStream = OpenRouterTestFixture.createSseStream;
 
 function createProvider(
-  options: Partial<ConstructorParameters<typeof OpenAiProvider>[0]> = {},
-): OpenAiProvider {
-  return new OpenAiProvider({
-    model: "gpt-5.5",
-    contextWindowTokens: 1_050_000,
-    apiKey: "openai-test-key",
+  options: Partial<ConstructorParameters<typeof MetaProvider>[0]> = {},
+): MetaProvider {
+  return new MetaProvider({
+    model: "muse-spark-1.1",
+    contextWindowTokens: 1_048_576,
+    apiKey: "meta-test-key",
     retryConfig: { maxRetries: 0, consecutive529Limit: 1 },
     ...options,
   });
@@ -44,7 +41,7 @@ function successfulResponse(chunks: string[]): Partial<Response> {
 }
 
 async function collectEvents(
-  provider: OpenAiProvider,
+  provider: MetaProvider,
   request: ChatRequest = DEFAULT_REQUEST,
 ): Promise<ChatStreamEvent[]> {
   const events: ChatStreamEvent[] = [];
@@ -62,79 +59,95 @@ async function expectStreamError(
   await expect(collectEvents(createProvider())).rejects.toThrow(expected);
 }
 
-describe("OpenAiProvider", () => {
+describe("MetaProvider", () => {
   beforeEach(() => {
-    delete process.env.OPENAI_API_KEY;
+    delete process.env.META_API_KEY;
+    delete process.env.MODEL_API_KEY;
     globalThis.fetch = originalFetch;
   });
 
   afterAll(() => {
     globalThis.fetch = originalFetch;
     if (originalApiKey === undefined) {
-      delete process.env.OPENAI_API_KEY;
+      delete process.env.META_API_KEY;
     } else {
-      process.env.OPENAI_API_KEY = originalApiKey;
+      process.env.META_API_KEY = originalApiKey;
+    }
+    if (originalGenericApiKey === undefined) {
+      delete process.env.MODEL_API_KEY;
+    } else {
+      process.env.MODEL_API_KEY = originalGenericApiKey;
     }
   });
 
   describe("constructor", () => {
-    it("accepts an explicit API key and configured context window", () => {
+    it("accepts an explicit key and configured context window", () => {
       const provider = createProvider();
-      expect(provider.name).toBe("openai");
-      expect(provider.getCapabilities().contextWindowTokens).toBe(1_050_000);
+      expect(provider.name).toBe("meta");
+      expect(provider.getCapabilities().contextWindowTokens).toBe(1_048_576);
     });
 
-    it("uses OPENAI_API_KEY when no explicit key is supplied", () => {
-      process.env.OPENAI_API_KEY = "openai-env-key";
-      const provider = new OpenAiProvider({
-        model: "gpt-5.4-mini",
-        contextWindowTokens: 400_000,
+    it("uses META_API_KEY when no explicit key is supplied", () => {
+      process.env.META_API_KEY = "meta-env-key";
+      const provider = new MetaProvider({
+        model: "muse-spark-1.1",
+        contextWindowTokens: 1_048_576,
       });
-      expect(provider.name).toBe("openai");
+      expect(provider.name).toBe("meta");
     });
 
-    it("rejects a missing API key", () => {
+    it("rejects a missing key", () => {
       expect(
         () =>
-          new OpenAiProvider({
-            model: "gpt-5.5",
-            contextWindowTokens: 1_050_000,
+          new MetaProvider({
+            model: "muse-spark-1.1",
+            contextWindowTokens: 1_048_576,
+          }),
+      ).toThrow(ProviderAuthenticationError);
+    });
+
+    it("does not use the generic MODEL_API_KEY variable", () => {
+      process.env.MODEL_API_KEY = "generic-model-key";
+      expect(
+        () =>
+          new MetaProvider({
+            model: "muse-spark-1.1",
+            contextWindowTokens: 1_048_576,
           }),
       ).toThrow(ProviderAuthenticationError);
     });
   });
 
   describe("request and stream mapping", () => {
-    it("streams assistant text and exactly one terminal event", async () => {
+    it("targets Meta with the explicit key and streams assistant text", async () => {
+      process.env.META_API_KEY = "meta-env-key";
       globalThis.fetch = jest
         .fn()
         .mockResolvedValue(
           successfulResponse([
-            'data: {"type":"response.output_text.delta","delta":"Hello"}\n\n',
-            'data: {"type":"response.output_text.delta","delta":" OpenAI"}\n\n',
+            'data: {"type":"response.output_text.delta","delta":"Hello Meta"}\n\n',
             'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
           ]),
         );
 
       const events = await collectEvents(createProvider());
       expect(events).toEqual([
-        { type: "assistant_text", delta: "Hello" },
-        { type: "assistant_text", delta: " OpenAI" },
+        { type: "assistant_text", delta: "Hello Meta" },
         { type: "terminal", stopReason: "end_turn" },
       ]);
       expect(fetch).toHaveBeenCalledWith(
-        "https://api.openai.com/v1/responses",
+        "https://api.meta.ai/v1/responses",
         expect.objectContaining({
           method: "POST",
           headers: expect.objectContaining({
-            Authorization: "Bearer openai-test-key",
+            Authorization: "Bearer meta-test-key",
             "Content-Type": "application/json",
           }),
         }),
       );
     });
 
-    it("maps messages, images, tools, reasoning options, and batched results", async () => {
+    it("maps images, tools, reasoning summaries, and batched tool results", async () => {
       globalThis.fetch = jest
         .fn()
         .mockResolvedValue(
@@ -143,15 +156,9 @@ describe("OpenAiProvider", () => {
           ]),
         );
       const signal = new AbortController().signal;
-      const reasoningItem = {
-        type: "reasoning",
-        id: "rs_1",
-        encrypted_content: "encrypted",
-        summary: [],
-      };
 
       await collectEvents(createProvider(), {
-        model: "gpt-5.5",
+        model: "muse-spark-1.1",
         signal,
         requestReasoning: true,
         tools: [
@@ -177,8 +184,7 @@ describe("OpenAiProvider", () => {
           },
           {
             role: "assistant",
-            content: "",
-            reasoningContent: JSON.stringify([reasoningItem]),
+            content: "I will look that up.",
             toolCalls: [
               {
                 id: "call_1",
@@ -204,7 +210,7 @@ describe("OpenAiProvider", () => {
       const body = JSON.parse(init.body);
       expect(init.signal).toBe(signal);
       expect(body).toMatchObject({
-        model: "gpt-5.5",
+        model: "muse-spark-1.1",
         stream: true,
         store: false,
         include: ["reasoning.encrypted_content"],
@@ -217,6 +223,7 @@ describe("OpenAiProvider", () => {
           },
         ],
       });
+      expect(body.reasoning.effort).toBeUndefined();
       expect(body.input).toEqual([
         { role: "system", content: "Be concise" },
         {
@@ -233,7 +240,11 @@ describe("OpenAiProvider", () => {
             },
           ],
         },
-        reasoningItem,
+        {
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "I will look that up." }],
+        },
         {
           type: "function_call",
           call_id: "call_1",
@@ -249,23 +260,46 @@ describe("OpenAiProvider", () => {
       ]);
     });
 
-    it("assembles function calls, preserves reasoning state, and emits summaries", async () => {
+    it("preserves reasoning, commentary, and parallel calls in output order", async () => {
       const reasoningItem = {
         type: "reasoning",
         id: "rs_1",
-        encrypted_content: "opaque-value",
+        encrypted_content: "opaque",
         summary: [],
+      };
+      const commentaryItem = {
+        type: "message",
+        id: "msg_1",
+        role: "assistant",
+        status: "completed",
+        phase: "commentary",
+        content: [{ type: "output_text", text: "I will check both." }],
+      };
+      const firstCall = {
+        type: "function_call",
+        id: "fc_1",
+        call_id: "call_1",
+        name: "lookup",
+        arguments: '{"query":"first"}',
+        status: "completed",
+      };
+      const secondCall = {
+        type: "function_call",
+        id: "fc_2",
+        call_id: "call_2",
+        name: "lookup",
+        arguments: '{"query":"second"}',
+        status: "completed",
       };
       globalThis.fetch = jest
         .fn()
         .mockResolvedValue(
           successfulResponse([
-            'data: {"type":"response.reasoning_summary_text.delta","delta":"Checking the tool."}\n\n',
+            'data: {"type":"response.reasoning_summary_text.delta","delta":"Checking both."}\n\n',
             `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: reasoningItem })}\n\n`,
-            'data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":""}}\n\n',
-            'data: {"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\\"query\\":"}\n\n',
-            'data: {"type":"response.function_call_arguments.delta","output_index":1,"delta":"\\"value\\"}"}\n\n',
-            'data: {"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{\\"query\\":\\"value\\"}"}}\n\n',
+            `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 1, item: commentaryItem })}\n\n`,
+            `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 2, item: firstCall })}\n\n`,
+            `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 3, item: secondCall })}\n\n`,
             'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
           ]),
         );
@@ -273,7 +307,7 @@ describe("OpenAiProvider", () => {
       const events = await collectEvents(createProvider());
       expect(events[0]).toEqual({
         type: "reasoning_summary",
-        summary: "Checking the tool.",
+        summary: "Checking both.",
         source: "provider",
       });
       expect(events[1]).toEqual({
@@ -281,231 +315,38 @@ describe("OpenAiProvider", () => {
         toolCalls: [
           {
             id: "call_1",
-            function: { name: "lookup", arguments: { query: "value" } },
+            function: { name: "lookup", arguments: { query: "first" } },
+          },
+          {
+            id: "call_2",
+            function: { name: "lookup", arguments: { query: "second" } },
           },
         ],
         reasoningContent: JSON.stringify([
           reasoningItem,
-          {
-            type: "function_call",
-            id: "fc_1",
-            call_id: "call_1",
-            name: "lookup",
-            arguments: '{"query":"value"}',
-          },
+          commentaryItem,
+          firstCall,
+          secondCall,
         ]),
       });
       expect(events[2]).toEqual({ type: "terminal", stopReason: "tool_use" });
     });
 
-    it("replays function calls without reasoning items", async () => {
-      const functionCallItem = {
-        type: "function_call",
-        id: "fc_1",
-        call_id: "call_1",
-        name: "lookup",
-        arguments: '{"query":"value"}',
-        status: "completed",
-      };
-      globalThis.fetch = jest
-        .fn()
-        .mockResolvedValue(
-          successfulResponse([
-            `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: functionCallItem })}\n\n`,
-            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
-          ]),
-        );
-
-      const events = await collectEvents(createProvider());
-      const toolCallsEvent = events[0] as ToolCallsStreamEvent;
-      expect(toolCallsEvent).toEqual({
-        type: "tool_calls",
-        toolCalls: [
-          {
-            id: "call_1",
-            function: { name: "lookup", arguments: { query: "value" } },
-          },
-        ],
-        reasoningContent: JSON.stringify([functionCallItem]),
-      });
-
-      globalThis.fetch = jest
-        .fn()
-        .mockResolvedValue(
-          successfulResponse([
-            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
-          ]),
-        );
-      await collectEvents(createProvider(), {
-        model: "gpt-5.5",
-        messages: [
-          { role: "user", content: "Look this up" },
-          {
-            role: "assistant",
-            content: "",
-            toolCalls: toolCallsEvent.toolCalls,
-            reasoningContent: toolCallsEvent.reasoningContent,
-          },
-          { role: "tool", content: "result", toolCallId: "call_1" },
-        ],
-      });
-
-      const body = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
-      expect(body.input).toEqual([
-        { role: "user", content: "Look this up" },
-        functionCallItem,
-        {
-          type: "function_call_output",
-          call_id: "call_1",
-          output: "result",
-        },
-      ]);
-    });
-
-    it("drops assistant message items from captured replay state", async () => {
-      const assistantMessageItem = {
-        type: "message",
-        id: "msg_1",
-        role: "assistant",
-        status: "completed",
-        phase: "commentary",
-        content: [{ type: "output_text", text: "Checking." }],
-      };
-      const functionCallItem = {
-        type: "function_call",
-        id: "fc_1",
-        call_id: "call_1",
-        name: "lookup",
-        arguments: '{"query":"value"}',
-        status: "completed",
-      };
-      globalThis.fetch = jest
-        .fn()
-        .mockResolvedValue(
-          successfulResponse([
-            `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: assistantMessageItem })}\n\n`,
-            `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 1, item: functionCallItem })}\n\n`,
-            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
-          ]),
-        );
-
-      const events = await collectEvents(createProvider());
-      const toolCallsEvent = events[0] as ToolCallsStreamEvent;
-      expect(JSON.parse(toolCallsEvent.reasoningContent ?? "[]")).toEqual([
-        functionCallItem,
-      ]);
-    });
-
-    it("never annotates legacy assistant tool history as commentary", async () => {
-      globalThis.fetch = jest
-        .fn()
-        .mockResolvedValue(
-          successfulResponse([
-            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
-          ]),
-        );
-
-      await collectEvents(createProvider(), {
-        model: "gpt-5.5",
-        messages: [
-          { role: "user", content: "Look this up" },
-          {
-            role: "assistant",
-            content: "I will look that up.",
-            toolCalls: [
-              {
-                id: "call_legacy",
-                function: { name: "lookup", arguments: { query: "value" } },
-              },
-            ],
-          },
-          { role: "tool", content: "result", toolCallId: "call_legacy" },
-        ],
-      });
-
-      const body = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
-      expect(body.input).toEqual([
-        { role: "user", content: "Look this up" },
-        { role: "assistant", content: "I will look that up." },
-        {
-          type: "function_call",
-          call_id: "call_legacy",
-          name: "lookup",
-          arguments: '{"query":"value"}',
-          status: "completed",
-        },
-        {
-          type: "function_call_output",
-          call_id: "call_legacy",
-          output: "result",
-        },
-      ]);
-      expect(
-        body.input.some(
-          (item: Record<string, unknown>) => item.phase === "commentary",
-        ),
-      ).toBe(false);
-    });
-
-    it("omits the Responses item id for legacy tool-call history", async () => {
-      globalThis.fetch = jest
-        .fn()
-        .mockResolvedValue(
-          successfulResponse([
-            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
-          ]),
-        );
-
-      await collectEvents(createProvider(), {
-        model: "gpt-5.5",
-        messages: [
-          { role: "user", content: "Look this up" },
-          {
-            role: "assistant",
-            content: "",
-            toolCalls: [
-              {
-                id: "call_legacy",
-                function: { name: "lookup", arguments: { query: "value" } },
-              },
-            ],
-          },
-          { role: "tool", content: "result", toolCallId: "call_legacy" },
-        ],
-      });
-
-      const body = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
-      expect(body.input).toEqual([
-        { role: "user", content: "Look this up" },
-        {
-          type: "function_call",
-          call_id: "call_legacy",
-          name: "lookup",
-          arguments: '{"query":"value"}',
-          status: "completed",
-        },
-        {
-          type: "function_call_output",
-          call_id: "call_legacy",
-          output: "result",
-        },
-      ]);
-    });
-
-    it("replays interleaved reasoning and parallel function calls in output order", async () => {
-      globalThis.fetch = jest
-        .fn()
-        .mockResolvedValue(
-          successfulResponse([
-            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
-          ]),
-        );
+    it("replays completed output items exactly once before tool results", async () => {
       const replayItems = [
         {
           type: "reasoning",
           id: "rs_1",
-          encrypted_content: "first",
+          encrypted_content: "opaque",
           summary: [],
+        },
+        {
+          type: "message",
+          id: "msg_1",
+          role: "assistant",
+          status: "completed",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "I will check both." }],
         },
         {
           type: "function_call",
@@ -516,12 +357,6 @@ describe("OpenAiProvider", () => {
           status: "completed",
         },
         {
-          type: "reasoning",
-          id: "rs_2",
-          encrypted_content: "second",
-          summary: [],
-        },
-        {
           type: "function_call",
           id: "fc_2",
           call_id: "call_2",
@@ -530,14 +365,21 @@ describe("OpenAiProvider", () => {
           status: "completed",
         },
       ];
+      globalThis.fetch = jest
+        .fn()
+        .mockResolvedValue(
+          successfulResponse([
+            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+          ]),
+        );
 
       await collectEvents(createProvider(), {
-        model: "gpt-5.5",
+        model: "muse-spark-1.1",
         messages: [
           { role: "user", content: "Look up both" },
           {
             role: "assistant",
-            content: "",
+            content: "I will check both.",
             reasoningContent: JSON.stringify(replayItems),
             toolCalls: [
               {
@@ -572,7 +414,67 @@ describe("OpenAiProvider", () => {
       ]);
     });
 
-    it("passes arbitrary future model IDs through unchanged", async () => {
+    it("places synthesized legacy commentary before replayed function calls", async () => {
+      const reasoningItem = {
+        type: "reasoning",
+        id: "rs_1",
+        encrypted_content: "opaque",
+        summary: [],
+      };
+      const functionCallItem = {
+        type: "function_call",
+        id: "fc_1",
+        call_id: "call_1",
+        name: "lookup",
+        arguments: '{"query":"value"}',
+        status: "completed",
+      };
+      globalThis.fetch = jest
+        .fn()
+        .mockResolvedValue(
+          successfulResponse([
+            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+          ]),
+        );
+
+      await collectEvents(createProvider(), {
+        model: "muse-spark-1.1",
+        messages: [
+          { role: "user", content: "Look this up" },
+          {
+            role: "assistant",
+            content: "I will look that up.",
+            reasoningContent: JSON.stringify([reasoningItem, functionCallItem]),
+            toolCalls: [
+              {
+                id: "call_1",
+                function: { name: "lookup", arguments: { query: "value" } },
+              },
+            ],
+          },
+          { role: "tool", content: "result", toolCallId: "call_1" },
+        ],
+      });
+
+      const body = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
+      expect(body.input).toEqual([
+        { role: "user", content: "Look this up" },
+        reasoningItem,
+        {
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "I will look that up." }],
+        },
+        functionCallItem,
+        {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: "result",
+        },
+      ]);
+    });
+
+    it("passes arbitrary future Meta model IDs through unchanged", async () => {
       globalThis.fetch = jest
         .fn()
         .mockResolvedValue(
@@ -581,16 +483,17 @@ describe("OpenAiProvider", () => {
           ]),
         );
       const provider = createProvider({
-        model: "gpt-future-general",
+        model: "muse-future",
         contextWindowTokens: 2_000_000,
       });
       await collectEvents(provider, {
-        model: "gpt-future-general",
+        model: "muse-future",
         messages: [{ role: "user", content: "Hello" }],
       });
 
       const body = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
-      expect(body.model).toBe("gpt-future-general");
+      expect(body.model).toBe("muse-future");
+      expect(provider.getCapabilities().contextWindowTokens).toBe(2_000_000);
     });
 
     it.each([
@@ -611,7 +514,7 @@ describe("OpenAiProvider", () => {
   });
 
   describe("errors and retries", () => {
-    it("maps authentication failures", async () => {
+    it("maps authentication, rate-limit, model, context, and capacity failures", async () => {
       await expectStreamError(
         { ok: false, status: 401 },
         ProviderAuthenticationError,
@@ -620,9 +523,6 @@ describe("OpenAiProvider", () => {
         { ok: false, status: 403 },
         ProviderAuthenticationError,
       );
-    });
-
-    it("maps rate limits and missing models", async () => {
       await expectStreamError(
         {
           ok: false,
@@ -635,9 +535,6 @@ describe("OpenAiProvider", () => {
         { ok: false, status: 404 },
         ProviderModelNotFoundError,
       );
-    });
-
-    it("maps context length and capacity failures", async () => {
       await expectStreamError(
         {
           ok: false,
@@ -655,7 +552,7 @@ describe("OpenAiProvider", () => {
       );
     });
 
-    it("retries transient failures and emits diagnostics", async () => {
+    it("retries transient failures with Meta diagnostics", async () => {
       const diagnostics: unknown[] = [];
       globalThis.fetch = jest
         .fn()
@@ -683,38 +580,32 @@ describe("OpenAiProvider", () => {
       expect(diagnostics).toEqual([
         expect.objectContaining({
           type: "provider_retry",
-          provider: "openai",
-          model: "gpt-5.5",
+          provider: "meta",
+          model: "muse-spark-1.1",
           attemptNumber: 1,
         }),
       ]);
     });
 
-    it("honors cancellation without retrying", async () => {
+    it("does not retry cancellation or invalid requests", async () => {
       globalThis.fetch = jest
         .fn()
-        .mockRejectedValue(
+        .mockRejectedValueOnce(
           new DOMException("This operation was aborted", "AbortError"),
         );
       const provider = createProvider({
         retryConfig: { maxRetries: 2, consecutive529Limit: 2, baseDelayMs: 0 },
       });
-
       await expect(collectEvents(provider)).rejects.toThrow(
         "Request cancelled",
       );
       expect(fetch).toHaveBeenCalledTimes(1);
-    });
 
-    it("does not retry invalid requests", async () => {
       globalThis.fetch = jest.fn().mockResolvedValue({
         ok: false,
         status: 400,
         text: async () =>
           JSON.stringify({ error: { message: "Invalid request" } }),
-      });
-      const provider = createProvider({
-        retryConfig: { maxRetries: 3, consecutive529Limit: 2, baseDelayMs: 0 },
       });
       await expect(collectEvents(provider)).rejects.toThrow(
         ProviderInvalidRequestError,

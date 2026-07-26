@@ -15,6 +15,7 @@ const KNOWN_PROVIDERS = [
   "gemini",
   "xai",
   "openai",
+  "meta",
 ];
 
 const provider = process.env.PROVIDER?.trim().toLowerCase();

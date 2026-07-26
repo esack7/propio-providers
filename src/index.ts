@@ -46,6 +46,7 @@ export type {
   GeminiProviderConfig,
   AnthropicProviderConfig,
   OpenAiProviderConfig,
+  MetaProviderConfig,
   ProviderConfig,
   ProvidersConfig,
 } from "./config.js";
