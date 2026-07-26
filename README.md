@@ -79,7 +79,7 @@ The provider streams assistant text, function calls, and OpenAI-provided reasoni
 
 ### Meta Model API
 
-The Meta provider uses Meta's OpenAI-compatible Responses API. Supply an API key directly or set `MODEL_API_KEY`:
+The Meta provider uses Meta's OpenAI-compatible Responses API. Supply an API key directly or set `META_API_KEY`:
 
 ```ts
 import { createProvider } from "@propio-ai/providers";
@@ -95,11 +95,13 @@ const meta = createProvider({
     },
   ],
   defaultModel: "muse-spark-1.1",
-  apiKey: process.env.MODEL_API_KEY,
+  apiKey: process.env.META_API_KEY,
 });
 ```
 
 Meta requests stream from `https://api.meta.ai/v1/responses` without server-side response storage. Encrypted reasoning and completed output items are preserved internally so tool-call turns can be replayed in provider order. Model support remains configuration-driven; future Meta model IDs do not require a library update.
+
+The provider reads only the namespaced `META_API_KEY` environment variable; it does not fall back to the generic `MODEL_API_KEY`. Meta continuation state can include completed assistant commentary items, so `reasoningContent` may contain plaintext user-visible commentary in addition to opaque reasoning and function-call state. Applications that persist `reasoningContent` should protect it as conversation content.
 
 ## API
 

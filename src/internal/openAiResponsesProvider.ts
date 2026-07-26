@@ -83,8 +83,11 @@ export interface OpenAiResponsesProviderProfile {
   readonly serviceErrorMessage: string;
   readonly connectionErrorMessage: string;
   readonly requestFailedMessage: string;
-  readonly preserveAssistantOutputItems?: boolean;
-  readonly useCommentaryPhaseForLegacyToolCalls?: boolean;
+  /**
+   * Preserve completed assistant commentary items for exact replay and mark
+   * synthesized legacy assistant tool-call history as commentary.
+   */
+  readonly preserveAssistantCommentary?: boolean;
 }
 
 /** Shared implementation for providers exposing the OpenAI Responses wire API. */
@@ -225,14 +228,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
     input: Record<string, unknown>[],
   ): void {
     const replayItems = this.parseReplayItems(message.reasoningContent);
-    input.push(...replayItems);
-
-    const hasReplayedAssistantMessage = replayItems.some(
-      (item) => item.type === "message",
-    );
-    if (message.content && !hasReplayedAssistantMessage) {
-      input.push(this.createAssistantMessageInput(message));
-    }
+    this.appendReplayItemsAndAssistantMessage(message, replayItems, input);
 
     const replayedCallIds = new Set(
       replayItems
@@ -255,11 +251,41 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
     }
   }
 
+  private appendReplayItemsAndAssistantMessage(
+    message: ChatMessage,
+    replayItems: ResponsesReplayItem[],
+    input: Record<string, unknown>[],
+  ): void {
+    const hasReplayedAssistantMessage = replayItems.some(
+      (item) => item.type === "message",
+    );
+    if (!message.content || hasReplayedAssistantMessage) {
+      input.push(...replayItems);
+      return;
+    }
+
+    const assistantMessage = this.createAssistantMessageInput(message);
+    const firstFunctionCallIndex =
+      this.profile.preserveAssistantCommentary === true
+        ? replayItems.findIndex((item) => item.type === "function_call")
+        : -1;
+    if (firstFunctionCallIndex < 0) {
+      input.push(...replayItems, assistantMessage);
+      return;
+    }
+
+    input.push(
+      ...replayItems.slice(0, firstFunctionCallIndex),
+      assistantMessage,
+      ...replayItems.slice(firstFunctionCallIndex),
+    );
+  }
+
   private createAssistantMessageInput(
     message: ChatMessage,
   ): Record<string, unknown> {
     if (
-      this.profile.useCommentaryPhaseForLegacyToolCalls &&
+      this.profile.preserveAssistantCommentary === true &&
       message.toolCalls?.length
     ) {
       return {
@@ -295,7 +321,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
     return (
       type === "reasoning" ||
       type === "function_call" ||
-      (type === "message" && this.profile.preserveAssistantOutputItems === true)
+      (type === "message" && this.profile.preserveAssistantCommentary === true)
     );
   }
 
@@ -517,7 +543,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
       event.item?.type === "reasoning" ||
       event.item?.type === "function_call" ||
       (event.item?.type === "message" &&
-        this.profile.preserveAssistantOutputItems === true)
+        this.profile.preserveAssistantCommentary === true)
     ) {
       state.replayItemsByOutputIndex.set(
         event.output_index ?? 0,
@@ -549,8 +575,9 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
       .map(([, item]) => item);
 
     // The Responses API requires prior output items to be replayed unchanged.
-    // reasoningContent is provider-private continuation state, not user-visible
-    // thinking, so it carries these opaque items in their original order.
+    // reasoningContent is provider-private continuation state. It can contain
+    // opaque reasoning/function-call state and, for commentary-preserving
+    // profiles, plaintext assistant message items in their original order.
     return {
       type: "tool_calls",
       toolCalls,

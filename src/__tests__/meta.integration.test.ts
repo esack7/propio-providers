@@ -87,72 +87,68 @@ function expectValidReplayState(toolEvent: ToolCallsStreamEvent): void {
   }
 }
 
-describeProviderIntegration(
-  "meta",
-  { env: [{ vars: "MODEL_API_KEY" }] },
-  () => {
-    const config: MetaProviderConfig = {
-      name: "meta",
-      type: "meta",
-      models: [MODEL],
-      defaultModel: MODEL.key,
-      apiKey: requireEnv("MODEL_API_KEY"),
-    };
+describeProviderIntegration("meta", { env: [{ vars: "META_API_KEY" }] }, () => {
+  const config: MetaProviderConfig = {
+    name: "meta",
+    type: "meta",
+    models: [MODEL],
+    defaultModel: MODEL.key,
+    apiKey: requireEnv("META_API_KEY"),
+  };
 
-    it("smoke tests assistant text", async () => {
-      const provider = createProvider(config);
-      expect(provider).toBeInstanceOf(MetaProvider);
-      await expectProviderStreamsAssistantText(provider, {
-        model: MODEL.key,
-        messages: [{ role: "user", content: "Reply with exactly: OK" }],
-      });
-    }, 120_000);
+  it("smoke tests assistant text", async () => {
+    const provider = createProvider(config);
+    expect(provider).toBeInstanceOf(MetaProvider);
+    await expectProviderStreamsAssistantText(provider, {
+      model: MODEL.key,
+      messages: [{ role: "user", content: "Reply with exactly: OK" }],
+    });
+  }, 120_000);
 
-    it("streams encrypted reasoning, tools, replay state, and a final response", async () => {
-      const provider = createProvider(config);
-      const messages: ChatMessage[] = [
+  it("streams encrypted reasoning, tools, replay state, and a final response", async () => {
+    const provider = createProvider(config);
+    const messages: ChatMessage[] = [
+      {
+        role: "user",
+        content:
+          "Call the required_value tool with key meta-test. Do not answer before calling it. In the final answer, include the returned value exactly.",
+      },
+    ];
+    const first = await collectMetaStream(provider, {
+      model: MODEL.key,
+      requestReasoning: true,
+      messages,
+      tools: [REQUIRED_VALUE_TOOL],
+    });
+
+    expect(first.toolEvent?.toolCalls).toHaveLength(1);
+    const toolEvent = first.toolEvent as ToolCallsStreamEvent;
+    const toolCall = toolEvent.toolCalls[0];
+    expect(toolCall.function.name).toBe("required_value");
+    expect(first.terminalReason).toBe("tool_use");
+    expectValidReplayState(toolEvent);
+
+    const second = await collectMetaStream(provider, {
+      model: MODEL.key,
+      requestReasoning: true,
+      tools: [REQUIRED_VALUE_TOOL],
+      messages: [
+        ...messages,
         {
-          role: "user",
-          content:
-            "Call the required_value tool with key meta-test. Do not answer before calling it. In the final answer, include the returned value exactly.",
+          role: "assistant",
+          content: first.assistantText,
+          reasoningContent: toolEvent.reasoningContent,
+          toolCalls: toolEvent.toolCalls,
         },
-      ];
-      const first = await collectMetaStream(provider, {
-        model: MODEL.key,
-        requestReasoning: true,
-        messages,
-        tools: [REQUIRED_VALUE_TOOL],
-      });
+        {
+          role: "tool",
+          content: "META_TOOL_ROUND_OK",
+          toolCallId: toolCall.id,
+        },
+      ],
+    });
 
-      expect(first.toolEvent?.toolCalls).toHaveLength(1);
-      const toolEvent = first.toolEvent as ToolCallsStreamEvent;
-      const toolCall = toolEvent.toolCalls[0];
-      expect(toolCall.function.name).toBe("required_value");
-      expect(first.terminalReason).toBe("tool_use");
-      expectValidReplayState(toolEvent);
-
-      const second = await collectMetaStream(provider, {
-        model: MODEL.key,
-        requestReasoning: true,
-        tools: [REQUIRED_VALUE_TOOL],
-        messages: [
-          ...messages,
-          {
-            role: "assistant",
-            content: first.assistantText,
-            reasoningContent: toolEvent.reasoningContent,
-            toolCalls: toolEvent.toolCalls,
-          },
-          {
-            role: "tool",
-            content: "META_TOOL_ROUND_OK",
-            toolCallId: toolCall.id,
-          },
-        ],
-      });
-
-      expect(second.assistantText).toContain("META_TOOL_ROUND_OK");
-      expect(second.terminalReason).toBe("end_turn");
-    }, 120_000);
-  },
-);
+    expect(second.assistantText).toContain("META_TOOL_ROUND_OK");
+    expect(second.terminalReason).toBe("end_turn");
+  }, 120_000);
+});

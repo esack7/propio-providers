@@ -362,6 +362,91 @@ describe("OpenAiProvider", () => {
       ]);
     });
 
+    it("drops assistant message items from captured replay state", async () => {
+      const assistantMessageItem = {
+        type: "message",
+        id: "msg_1",
+        role: "assistant",
+        status: "completed",
+        phase: "commentary",
+        content: [{ type: "output_text", text: "Checking." }],
+      };
+      const functionCallItem = {
+        type: "function_call",
+        id: "fc_1",
+        call_id: "call_1",
+        name: "lookup",
+        arguments: '{"query":"value"}',
+        status: "completed",
+      };
+      globalThis.fetch = jest
+        .fn()
+        .mockResolvedValue(
+          successfulResponse([
+            `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: assistantMessageItem })}\n\n`,
+            `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 1, item: functionCallItem })}\n\n`,
+            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+          ]),
+        );
+
+      const events = await collectEvents(createProvider());
+      const toolCallsEvent = events[0] as ToolCallsStreamEvent;
+      expect(JSON.parse(toolCallsEvent.reasoningContent ?? "[]")).toEqual([
+        functionCallItem,
+      ]);
+    });
+
+    it("never annotates legacy assistant tool history as commentary", async () => {
+      globalThis.fetch = jest
+        .fn()
+        .mockResolvedValue(
+          successfulResponse([
+            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+          ]),
+        );
+
+      await collectEvents(createProvider(), {
+        model: "gpt-5.5",
+        messages: [
+          { role: "user", content: "Look this up" },
+          {
+            role: "assistant",
+            content: "I will look that up.",
+            toolCalls: [
+              {
+                id: "call_legacy",
+                function: { name: "lookup", arguments: { query: "value" } },
+              },
+            ],
+          },
+          { role: "tool", content: "result", toolCallId: "call_legacy" },
+        ],
+      });
+
+      const body = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
+      expect(body.input).toEqual([
+        { role: "user", content: "Look this up" },
+        { role: "assistant", content: "I will look that up." },
+        {
+          type: "function_call",
+          call_id: "call_legacy",
+          name: "lookup",
+          arguments: '{"query":"value"}',
+          status: "completed",
+        },
+        {
+          type: "function_call_output",
+          call_id: "call_legacy",
+          output: "result",
+        },
+      ]);
+      expect(
+        body.input.some(
+          (item: Record<string, unknown>) => item.phase === "commentary",
+        ),
+      ).toBe(false);
+    });
+
     it("omits the Responses item id for legacy tool-call history", async () => {
       globalThis.fetch = jest
         .fn()

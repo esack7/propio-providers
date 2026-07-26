@@ -16,7 +16,8 @@ const DEFAULT_REQUEST: ChatRequest = {
 };
 
 const originalFetch = globalThis.fetch;
-const originalApiKey = process.env.MODEL_API_KEY;
+const originalApiKey = process.env.META_API_KEY;
+const originalGenericApiKey = process.env.MODEL_API_KEY;
 const createSseStream = OpenRouterTestFixture.createSseStream;
 
 function createProvider(
@@ -60,6 +61,7 @@ async function expectStreamError(
 
 describe("MetaProvider", () => {
   beforeEach(() => {
+    delete process.env.META_API_KEY;
     delete process.env.MODEL_API_KEY;
     globalThis.fetch = originalFetch;
   });
@@ -67,9 +69,14 @@ describe("MetaProvider", () => {
   afterAll(() => {
     globalThis.fetch = originalFetch;
     if (originalApiKey === undefined) {
+      delete process.env.META_API_KEY;
+    } else {
+      process.env.META_API_KEY = originalApiKey;
+    }
+    if (originalGenericApiKey === undefined) {
       delete process.env.MODEL_API_KEY;
     } else {
-      process.env.MODEL_API_KEY = originalApiKey;
+      process.env.MODEL_API_KEY = originalGenericApiKey;
     }
   });
 
@@ -80,8 +87,8 @@ describe("MetaProvider", () => {
       expect(provider.getCapabilities().contextWindowTokens).toBe(1_048_576);
     });
 
-    it("uses MODEL_API_KEY when no explicit key is supplied", () => {
-      process.env.MODEL_API_KEY = "meta-env-key";
+    it("uses META_API_KEY when no explicit key is supplied", () => {
+      process.env.META_API_KEY = "meta-env-key";
       const provider = new MetaProvider({
         model: "muse-spark-1.1",
         contextWindowTokens: 1_048_576,
@@ -98,11 +105,22 @@ describe("MetaProvider", () => {
           }),
       ).toThrow(ProviderAuthenticationError);
     });
+
+    it("does not use the generic MODEL_API_KEY variable", () => {
+      process.env.MODEL_API_KEY = "generic-model-key";
+      expect(
+        () =>
+          new MetaProvider({
+            model: "muse-spark-1.1",
+            contextWindowTokens: 1_048_576,
+          }),
+      ).toThrow(ProviderAuthenticationError);
+    });
   });
 
   describe("request and stream mapping", () => {
     it("targets Meta with the explicit key and streams assistant text", async () => {
-      process.env.MODEL_API_KEY = "meta-env-key";
+      process.env.META_API_KEY = "meta-env-key";
       globalThis.fetch = jest
         .fn()
         .mockResolvedValue(
@@ -392,6 +410,66 @@ describe("MetaProvider", () => {
           type: "function_call_output",
           call_id: "call_2",
           output: "second result",
+        },
+      ]);
+    });
+
+    it("places synthesized legacy commentary before replayed function calls", async () => {
+      const reasoningItem = {
+        type: "reasoning",
+        id: "rs_1",
+        encrypted_content: "opaque",
+        summary: [],
+      };
+      const functionCallItem = {
+        type: "function_call",
+        id: "fc_1",
+        call_id: "call_1",
+        name: "lookup",
+        arguments: '{"query":"value"}',
+        status: "completed",
+      };
+      globalThis.fetch = jest
+        .fn()
+        .mockResolvedValue(
+          successfulResponse([
+            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+          ]),
+        );
+
+      await collectEvents(createProvider(), {
+        model: "muse-spark-1.1",
+        messages: [
+          { role: "user", content: "Look this up" },
+          {
+            role: "assistant",
+            content: "I will look that up.",
+            reasoningContent: JSON.stringify([reasoningItem, functionCallItem]),
+            toolCalls: [
+              {
+                id: "call_1",
+                function: { name: "lookup", arguments: { query: "value" } },
+              },
+            ],
+          },
+          { role: "tool", content: "result", toolCallId: "call_1" },
+        ],
+      });
+
+      const body = JSON.parse((fetch as jest.Mock).mock.calls[0][1].body);
+      expect(body.input).toEqual([
+        { role: "user", content: "Look this up" },
+        reasoningItem,
+        {
+          role: "assistant",
+          phase: "commentary",
+          content: [{ type: "output_text", text: "I will look that up." }],
+        },
+        functionCallItem,
+        {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: "result",
         },
       ]);
     });
