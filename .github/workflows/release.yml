@@ -46,7 +46,7 @@ jobs:
             exit 1
           fi
 
-          git fetch --no-tags origin main:refs/remotes/origin/main
+          git fetch --no-tags origin +main:refs/remotes/origin/main
           current_main_sha="$(git rev-parse origin/main)"
           if [[ "$GITHUB_SHA" != "$current_main_sha" ]]; then
             echo "main moved after dispatch; run the workflow again for $current_main_sha."
@@ -88,7 +88,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch --no-tags origin main:refs/remotes/origin/main
+          git fetch --no-tags origin +main:refs/remotes/origin/main
           current_main_sha="$(git rev-parse origin/main)"
           if [[ "$GITHUB_SHA" != "$current_main_sha" ]]; then
             echo "main moved during validation; run the workflow again for $current_main_sha."
@@ -97,6 +97,7 @@ jobs:
       - name: Evaluate the release
         shell: bash
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail

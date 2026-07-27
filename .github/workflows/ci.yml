@@ -2,6 +2,11 @@ name: CI
 
 on:
   pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - edited
     branches:
       - main
 
@@ -55,8 +60,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          breaking_title_pattern='^[a-z]+(\([^)]+\))?!:'
-          conventional_title_pattern='^[a-z]+(\([^)]+\))?: .+'
+          breaking_title_pattern='^(feat|fix|perf|refactor|docs|test|build|ci|chore|revert)(\([^)]+\))?!:'
+          conventional_title_pattern='^(feat|fix|perf|refactor|docs|test|build|ci|chore|revert)(\([^)]+\))?: .+'
 
           if [[ "$PR_TITLE" =~ $breaking_title_pattern ]]; then
             echo "Providers is pre-1.0: breaking change markers (!:) are not allowed."
@@ -64,7 +69,7 @@ jobs:
           fi
 
           if ! [[ "$PR_TITLE" =~ $conventional_title_pattern ]]; then
-            echo "PR title must be a Conventional Commit, for example: feat: add a provider"
+            echo "PR title must use an allowed Conventional Commit type, for example: feat: add a provider"
             exit 1
           fi
 

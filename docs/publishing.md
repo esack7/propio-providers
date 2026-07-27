@@ -23,9 +23,9 @@ feat(openai): support a new request option
 docs: clarify configuration
 ```
 
-`fix:` triggers a patch release and `feat:` triggers a minor release. Other
-valid conventional types, such as `docs:`, `test:`, `chore:`, and `ci:`, do not
-release by default.
+`fix:`, `perf:`, and `revert:` trigger a patch release, while `feat:` triggers a
+minor release. Other allowed conventional types, such as `docs:`, `test:`,
+`build:`, `chore:`, and `ci:`, do not release by default.
 
 This package remains pre-1.0. Until a deliberate stabilization decision,
 breaking markers are rejected in CI: do not use `!` before the colon in a PR
@@ -99,6 +99,9 @@ not part of required CI or the release workflow.
 Use `mode=dry-run` to preview the next version and release notes. A dry run
 neither publishes nor creates tags or a GitHub Release. It still verifies npm
 OIDC and repository push access.
+
+A publish run with no releasable commits exits successfully without creating an
+npm version, tag, or GitHub Release. That green no-op is expected.
 
 To disable live releases, set `NPM_PUBLISH_ENABLED` to anything other than
 `true`; do not delete the workflow or release history. If a dry run fails with
