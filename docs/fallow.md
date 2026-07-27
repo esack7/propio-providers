@@ -1,6 +1,6 @@
 # Fallow baseline
 
-This repository pins `fallow` at `3.9.1` in `devDependencies`. Run `npm ci` before analysis so Fallow resolves the repository's dependency graph.
+This repository pins `fallow` at `3.3.0` in `devDependencies`. This version supports the repository's Node.js 20 minimum. Run `npm ci` before analysis so Fallow resolves the repository's dependency graph.
 
 ```bash
 npm run fallow:check
