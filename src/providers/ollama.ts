@@ -109,6 +109,8 @@ export class OllamaProvider implements LLMProvider {
     this.onDiagnosticEvent = options.onDiagnosticEvent;
   }
 
+  // Public LLMProvider contract; callers receive providers through the factory interface.
+  // fallow-ignore-next-line unused-class-member
   getCapabilities(): ProviderCapabilities {
     return this.capabilities;
   }

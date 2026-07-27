@@ -169,56 +169,84 @@ export abstract class OpenAiCompatibleProvider implements LLMProvider {
     originalError: Error,
     options: StandardOpenAiErrorOptions,
   ): ProviderError | null {
-    if (response.status === 400 && isContextLengthError(normalizedMessage)) {
+    return (
+      this.translateClientResponseError(
+        response,
+        normalizedMessage,
+        originalError,
+        options,
+      ) ??
+      this.translateServerResponseError(
+        response,
+        normalizedMessage,
+        originalError,
+        options,
+      )
+    );
+  }
+
+  private translateClientResponseError(
+    response: Response,
+    normalizedMessage: string,
+    originalError: Error,
+    options: StandardOpenAiErrorOptions,
+  ): ProviderError | null {
+    switch (response.status) {
+      case 400:
+        return this.translateBadRequestError(normalizedMessage, originalError);
+      case 401:
+        return new ProviderAuthenticationError(
+          options.authenticationMessage,
+          originalError,
+        );
+      case 429:
+        return new ProviderRateLimitError(
+          options.rateLimitMessage,
+          parseRetryAfterSeconds(response.headers.get("retry-after")),
+          originalError,
+        );
+      case 404:
+        return new ProviderModelNotFoundError(
+          options.model,
+          `Model not found: ${options.model}`,
+          originalError,
+        );
+      default:
+        return null;
+    }
+  }
+
+  private translateBadRequestError(
+    normalizedMessage: string,
+    originalError: Error,
+  ): ProviderError {
+    if (isContextLengthError(normalizedMessage)) {
       return new ProviderContextLengthError(
         `Context length exceeded: ${normalizedMessage}`,
         originalError,
       );
     }
 
-    if (response.status === 400) {
-      return new ProviderInvalidRequestError(
-        normalizedMessage || "Invalid request",
-        originalError,
-      );
+    return new ProviderInvalidRequestError(
+      normalizedMessage || "Invalid request",
+      originalError,
+    );
+  }
+
+  private translateServerResponseError(
+    response: Response,
+    normalizedMessage: string,
+    originalError: Error,
+    options: StandardOpenAiErrorOptions,
+  ): ProviderError | null {
+    if (response.status < 500 || response.status >= 600) {
+      return null;
     }
 
-    if (response.status === 401) {
-      return new ProviderAuthenticationError(
-        options.authenticationMessage,
-        originalError,
-      );
-    }
-
-    if (response.status === 429) {
-      const retryAfterSeconds = parseRetryAfterSeconds(
-        response.headers.get("retry-after"),
-      );
-      return new ProviderRateLimitError(
-        options.rateLimitMessage,
-        retryAfterSeconds,
-        originalError,
-      );
-    }
-
-    if (response.status === 404) {
-      return new ProviderModelNotFoundError(
-        options.model,
-        `Model not found: ${options.model}`,
-        originalError,
-      );
-    }
-
-    if (response.status >= 500 && response.status < 600) {
-      return new ProviderError(
-        normalizedMessage
-          ? `${options.serviceErrorMessage}: ${normalizedMessage}`
-          : options.serviceErrorMessage,
-        originalError,
-      );
-    }
-
-    return null;
+    const message = normalizedMessage
+      ? `${options.serviceErrorMessage}: ${normalizedMessage}`
+      : options.serviceErrorMessage;
+    return new ProviderError(message, originalError);
   }
 
   protected isRetryableError(err: unknown): boolean {
