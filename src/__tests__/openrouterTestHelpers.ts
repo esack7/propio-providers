@@ -235,7 +235,7 @@ export class OpenRouterTestFixture {
   }
 }
 
-export function mockOpenRouterSseStream(chunks: string[]): void {
+function mockOpenRouterSseStream(chunks: string[]): void {
   globalThis.fetch = jest.fn().mockResolvedValue({
     ok: true,
     body: OpenRouterTestFixture.createSseStream(chunks),

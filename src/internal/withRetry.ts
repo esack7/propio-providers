@@ -24,6 +24,38 @@ export interface WithRetryOptions {
   onRetry?: (ctx: RetryContext) => void;
 }
 
+function trackConsecutive529s(
+  err: unknown,
+  consecutive529s: number,
+  options: WithRetryOptions,
+): number {
+  if (!options.is529?.(err)) {
+    return 0;
+  }
+
+  const nextConsecutive529s = consecutive529s + 1;
+  if (nextConsecutive529s < (options.consecutive529Limit ?? 3)) {
+    return nextConsecutive529s;
+  }
+
+  options.on529Fallback?.();
+  throw err;
+}
+
+function calculateRetryDelayMs(
+  attempt: number,
+  baseDelayMs: number,
+  maxDelayMs: number,
+): number {
+  const exponent = Math.min(attempt, 10);
+  const cap = Math.min(baseDelayMs * 2 ** exponent, maxDelayMs);
+  return Math.floor(Math.random() * cap);
+}
+
+function sleep(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
+}
+
 export async function withRetry<T>(
   fn: () => Promise<T>,
   opts: WithRetryOptions,
@@ -33,9 +65,6 @@ export async function withRetry<T>(
     baseDelayMs = 500,
     maxDelayMs = 32_000,
     isRetryable,
-    is529,
-    consecutive529Limit = 3,
-    on529Fallback,
     onFinalRetry,
     onRetry,
   } = opts;
@@ -51,31 +80,18 @@ export async function withRetry<T>(
 
       return await fn();
     } catch (err) {
-      // Track consecutive 529s (capacity exhaustion errors)
-      if (is529?.(err)) {
-        consecutive529s++;
-        if (consecutive529s >= consecutive529Limit) {
-          on529Fallback?.();
-          throw err;
-        }
-      } else {
-        consecutive529s = 0;
-      }
+      consecutive529s = trackConsecutive529s(err, consecutive529s, opts);
 
       // Don't retry if error is not retryable or we've exhausted budget
       if (!isRetryable(err) || attempt >= maxRetries) {
         throw err;
       }
 
-      // Compute delay: exponential backoff with full jitter
-      const exponent = Math.min(attempt, 10); // Cap at 2^10 to prevent overflow
-      const cap = Math.min(baseDelayMs * Math.pow(2, exponent), maxDelayMs);
-      const delayMs = Math.floor(Math.random() * cap);
+      const delayMs = calculateRetryDelayMs(attempt, baseDelayMs, maxDelayMs);
 
       onRetry?.({ attempt, maxRetries, delayMs, err });
 
-      // Sleep before retrying
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await sleep(delayMs);
     }
   }
 
