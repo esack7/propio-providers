@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Preview the release or publish it.
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - publish
+      expected_sha:
+        description: Required for publish; must be the current full main commit SHA.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Validate the selected main commit and publish authorization
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          MODE: ${{ inputs.mode }}
+          PUBLISH_ENABLED: ${{ vars.NPM_PUBLISH_ENABLED }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "Release must be dispatched from the main branch."
+            exit 1
+          fi
+
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$GITHUB_SHA" != "$current_main_sha" ]]; then
+            echo "main moved after dispatch; run the workflow again for $current_main_sha."
+            exit 1
+          fi
+
+          if [[ -n "$EXPECTED_SHA" && "$EXPECTED_SHA" != "$GITHUB_SHA" ]]; then
+            echo "expected_sha does not match the selected main commit."
+            exit 1
+          fi
+
+          if [[ "$MODE" == publish ]]; then
+            if [[ -z "$EXPECTED_SHA" ]]; then
+              echo "expected_sha is required in publish mode."
+              exit 1
+            fi
+            if [[ "$PUBLISH_ENABLED" != true ]]; then
+              echo "NPM_PUBLISH_ENABLED must be true in publish mode."
+              exit 1
+            fi
+          fi
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24.10.0"
+          cache: npm
+      - name: Install and verify the npm Trusted Publishing runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global npm@11.5.1
+          test "$(node --version)" = v24.10.0
+          test "$(npm --version)" = 11.5.1
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run build
+      - run: npm test
+      - run: npm pack --dry-run
+      - name: Confirm main has not advanced
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          current_main_sha="$(git rev-parse origin/main)"
+          if [[ "$GITHUB_SHA" != "$current_main_sha" ]]; then
+            echo "main moved during validation; run the workflow again for $current_main_sha."
+            exit 1
+          fi
+      - name: Evaluate the release
+        shell: bash
+        env:
+          MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          if [[ "$MODE" == dry-run ]]; then
+            ./node_modules/.bin/semantic-release --dry-run
+          else
+            ./node_modules/.bin/semantic-release
+          fi

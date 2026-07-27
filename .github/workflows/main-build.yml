@@ -1,0 +1,46 @@
+name: Main build
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  package-candidate:
+    name: package candidate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24.10.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run build
+      - run: npm test
+      - run: npm run fallow:check
+      - name: Build inspectable package candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm pack --json > npm-pack.json
+          candidate_file="$(node -e "console.log(require('./npm-pack.json')[0].filename)")"
+          shasum -a 256 "$candidate_file" > npm-pack.sha256
+          node -e "require('node:fs').writeFileSync('release-candidate.json', JSON.stringify({ commit: process.env.GITHUB_SHA, package: require('./package.json').name, sourceVersion: require('./package.json').version, publishable: false, note: 'Inspection artifact only; the manual release rebuilds after computing the final version.' }, null, 2) + '\n')"
+      - name: Upload package candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: npm-package-candidate-${{ github.sha }}
+          path: |
+            *.tgz
+            npm-pack.json
+            npm-pack.sha256
+            release-candidate.json
+          if-no-files-found: error
+          retention-days: 30
