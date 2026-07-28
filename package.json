@@ -36,7 +36,8 @@
     "cloudflare"
   ],
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   },
   "files": [
     "dist",
@@ -65,12 +66,17 @@
   },
   "devDependencies": {
     "@jest/globals": "30.3.0",
+    "@semantic-release/commit-analyzer": "13.0.1",
+    "@semantic-release/github": "12.0.9",
+    "@semantic-release/npm": "13.1.5",
+    "@semantic-release/release-notes-generator": "14.1.1",
     "@types/jest": "30.0.0",
     "@types/node": "25.5.2",
     "dotenv": "^17.4.2",
     "fallow": "3.3.0",
     "jest": "30.3.0",
     "prettier": "3.8.1",
+    "semantic-release": "25.0.8",
     "ts-jest": "29.4.9",
     "typescript": "6.0.2"
   }
