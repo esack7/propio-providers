@@ -147,6 +147,55 @@ describe("MetaProvider", () => {
       );
     });
 
+    it("routes commentary and complete reasoning summaries separately from the final answer", async () => {
+      const commentaryItem = {
+        type: "message",
+        id: "msg_commentary",
+        role: "assistant",
+        phase: "commentary",
+      };
+      const finalItem = {
+        type: "message",
+        id: "msg_final",
+        role: "assistant",
+        phase: "final",
+      };
+      globalThis.fetch = jest
+        .fn()
+        .mockResolvedValue(
+          successfulResponse([
+            `data: ${JSON.stringify({ type: "response.output_item.added", output_index: 0, item: commentaryItem })}\n\n`,
+            'data: {"type":"response.reasoning_summary_text.delta","delta":"Checking "}\n\n',
+            'data: {"type":"response.reasoning_summary_text.delta","delta":"both sources."}\n\n',
+            'data: {"type":"response.output_text.delta","output_index":0,"delta":"I will "}\n\n',
+            'data: {"type":"response.output_text.delta","output_index":0,"delta":"check them."}\n\n',
+            `data: ${JSON.stringify({ type: "response.output_item.added", output_index: 1, item: finalItem })}\n\n`,
+            'data: {"type":"response.output_text.delta","output_index":1,"delta":"Here is "}\n\n',
+            'data: {"type":"response.output_text.delta","output_index":1,"delta":"the answer."}\n\n',
+            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+          ]),
+        );
+
+      const events = await collectEvents(createProvider());
+      expect(events).toEqual([
+        {
+          type: "reasoning_summary",
+          summary: "Checking ",
+          source: "provider",
+        },
+        {
+          type: "reasoning_summary",
+          summary: "both sources.",
+          source: "provider",
+        },
+        { type: "thinking_delta", delta: "I will " },
+        { type: "thinking_delta", delta: "check them." },
+        { type: "assistant_text", delta: "Here is " },
+        { type: "assistant_text", delta: "the answer." },
+        { type: "terminal", stopReason: "end_turn" },
+      ]);
+    });
+
     it("maps images, tools, reasoning summaries, and batched tool results", async () => {
       globalThis.fetch = jest
         .fn()
@@ -295,7 +344,11 @@ describe("MetaProvider", () => {
         .fn()
         .mockResolvedValue(
           successfulResponse([
-            'data: {"type":"response.reasoning_summary_text.delta","delta":"Checking both."}\n\n',
+            `data: ${JSON.stringify({ type: "response.output_item.added", output_index: 1, item: commentaryItem })}\n\n`,
+            'data: {"type":"response.reasoning_summary_text.delta","delta":"Checking "}\n\n',
+            'data: {"type":"response.reasoning_summary_text.delta","delta":"both."}\n\n',
+            'data: {"type":"response.output_text.delta","output_index":1,"delta":"I will check "}\n\n',
+            'data: {"type":"response.output_text.delta","output_index":1,"delta":"both."}\n\n',
             `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 0, item: reasoningItem })}\n\n`,
             `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 1, item: commentaryItem })}\n\n`,
             `data: ${JSON.stringify({ type: "response.output_item.done", output_index: 2, item: firstCall })}\n\n`,
@@ -305,12 +358,21 @@ describe("MetaProvider", () => {
         );
 
       const events = await collectEvents(createProvider());
-      expect(events[0]).toEqual({
-        type: "reasoning_summary",
-        summary: "Checking both.",
-        source: "provider",
-      });
-      expect(events[1]).toEqual({
+      expect(events.slice(0, 4)).toEqual([
+        {
+          type: "reasoning_summary",
+          summary: "Checking ",
+          source: "provider",
+        },
+        {
+          type: "reasoning_summary",
+          summary: "both.",
+          source: "provider",
+        },
+        { type: "thinking_delta", delta: "I will check " },
+        { type: "thinking_delta", delta: "both." },
+      ]);
+      expect(events[4]).toEqual({
         type: "tool_calls",
         toolCalls: [
           {
@@ -329,7 +391,7 @@ describe("MetaProvider", () => {
           secondCall,
         ]),
       });
-      expect(events[2]).toEqual({ type: "terminal", stopReason: "tool_use" });
+      expect(events[5]).toEqual({ type: "terminal", stopReason: "tool_use" });
     });
 
     it("replays completed output items exactly once before tool results", async () => {
