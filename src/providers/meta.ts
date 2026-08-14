@@ -19,6 +19,7 @@ const META_PROFILE: OpenAiResponsesProviderProfile = {
   connectionErrorMessage: "Failed to connect to Meta Model API",
   requestFailedMessage: "Meta Model API request failed",
   preserveAssistantCommentary: true,
+  routeCommentaryToThinking: true,
 };
 
 /** Meta Model API implementation using the OpenAI-compatible Responses API. */

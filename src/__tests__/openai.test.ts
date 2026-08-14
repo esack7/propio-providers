@@ -134,6 +134,23 @@ describe("OpenAiProvider", () => {
       );
     });
 
+    it("does not reinterpret commentary-phase output for the OpenAI profile", async () => {
+      globalThis.fetch = jest
+        .fn()
+        .mockResolvedValue(
+          successfulResponse([
+            'data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","phase":"commentary"}}\n\n',
+            'data: {"type":"response.output_text.delta","output_index":0,"delta":"OpenAI text"}\n\n',
+            'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+          ]),
+        );
+
+      await expect(collectEvents(createProvider())).resolves.toEqual([
+        { type: "assistant_text", delta: "OpenAI text" },
+        { type: "terminal", stopReason: "end_turn" },
+      ]);
+    });
+
     it("maps messages, images, tools, reasoning options, and batched results", async () => {
       globalThis.fetch = jest
         .fn()

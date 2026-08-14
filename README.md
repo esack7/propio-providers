@@ -101,6 +101,12 @@ const meta = createProvider({
 
 Meta requests stream from `https://api.meta.ai/v1/responses` without server-side response storage. Encrypted reasoning and completed output items are preserved internally so tool-call turns can be replayed in provider order. Model support remains configuration-driven; future Meta model IDs do not require a library update.
 
+When reasoning is requested, explicit Meta reasoning summaries are emitted as
+`reasoning_summary` events and Meta `commentary` message text is emitted as
+`thinking_delta` events. Final answer text remains `assistant_text`. Opaque
+encrypted reasoning is retained only for continuation and is never emitted as
+visible output.
+
 The provider reads only the namespaced `META_API_KEY` environment variable; it does not fall back to the generic `MODEL_API_KEY`. Meta continuation state can include completed assistant commentary items, so `reasoningContent` may contain plaintext user-visible commentary in addition to opaque reasoning and function-call state. Applications that persist `reasoningContent` should protect it as conversation content.
 
 ## API

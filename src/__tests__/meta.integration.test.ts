@@ -36,6 +36,8 @@ const REQUIRED_VALUE_TOOL: ChatTool = {
 
 interface MetaStreamTrace {
   assistantText: string;
+  reasoningSummaryDeltas: string[];
+  thinkingDeltas: string[];
   toolEvent?: ToolCallsStreamEvent;
   terminalReason?: StopReason;
 }
@@ -44,13 +46,21 @@ async function collectMetaStream(
   provider: LLMProvider,
   request: ChatRequest,
 ): Promise<MetaStreamTrace> {
-  const trace: MetaStreamTrace = { assistantText: "" };
+  const trace: MetaStreamTrace = {
+    assistantText: "",
+    reasoningSummaryDeltas: [],
+    thinkingDeltas: [],
+  };
   for await (const event of provider.streamChat(request)) {
     if (!("type" in event)) {
       continue;
     }
     if (event.type === "assistant_text") {
       trace.assistantText += event.delta;
+    } else if (event.type === "reasoning_summary") {
+      trace.reasoningSummaryDeltas.push(event.summary);
+    } else if (event.type === "thinking_delta") {
+      trace.thinkingDeltas.push(event.delta);
     } else if (event.type === "tool_calls") {
       trace.toolEvent = event;
     } else if (event.type === "terminal") {
@@ -58,6 +68,16 @@ async function collectMetaStream(
     }
   }
   return trace;
+}
+
+function expectVisibleDeltasAreNonEmpty(trace: MetaStreamTrace): void {
+  for (const delta of [
+    ...trace.reasoningSummaryDeltas,
+    ...trace.thinkingDeltas,
+  ]) {
+    expect(typeof delta).toBe("string");
+    expect(delta.length).toBeGreaterThan(0);
+  }
 }
 
 function expectValidReplayState(toolEvent: ToolCallsStreamEvent): void {
@@ -127,6 +147,7 @@ describeProviderIntegration("meta", { env: [{ vars: "META_API_KEY" }] }, () => {
     expect(toolCall.function.name).toBe("required_value");
     expect(first.terminalReason).toBe("tool_use");
     expectValidReplayState(toolEvent);
+    expectVisibleDeltasAreNonEmpty(first);
 
     const second = await collectMetaStream(provider, {
       model: MODEL.key,
@@ -150,5 +171,6 @@ describeProviderIntegration("meta", { env: [{ vars: "META_API_KEY" }] }, () => {
 
     expect(second.assistantText).toContain("META_TOOL_ROUND_OK");
     expect(second.terminalReason).toBe("end_turn");
+    expectVisibleDeltasAreNonEmpty(second);
   }, 120_000);
 });

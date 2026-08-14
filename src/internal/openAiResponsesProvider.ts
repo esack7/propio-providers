@@ -66,6 +66,7 @@ interface FunctionCallAccumulator {
 
 interface ResponsesStreamState {
   readonly functionCallsByOutputIndex: Map<number, FunctionCallAccumulator>;
+  readonly outputItemPhasesByOutputIndex: Map<number, string>;
   readonly replayItemsByOutputIndex: Map<number, ResponsesReplayItem>;
   stopReason: StopReason;
 }
@@ -88,6 +89,8 @@ export interface OpenAiResponsesProviderProfile {
    * synthesized legacy assistant tool-call history as commentary.
    */
   readonly preserveAssistantCommentary?: boolean;
+  /** Route Responses API commentary output to the shared thinking stream. */
+  readonly routeCommentaryToThinking?: boolean;
 }
 
 /** Shared implementation for providers exposing the OpenAI Responses wire API. */
@@ -366,6 +369,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
   ): AsyncIterable<ChatStreamEvent> {
     const state: ResponsesStreamState = {
       functionCallsByOutputIndex: new Map(),
+      outputItemPhasesByOutputIndex: new Map(),
       replayItemsByOutputIndex: new Map(),
       stopReason: "end_turn",
     };
@@ -395,7 +399,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
     event: ResponsesStreamEvent,
     state: ResponsesStreamState,
   ): ChatStreamEvent | null {
-    const visibleEvent = this.createVisibleStreamEvent(event);
+    const visibleEvent = this.createVisibleStreamEvent(event, state);
     if (visibleEvent) {
       return visibleEvent;
     }
@@ -406,12 +410,16 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
 
   private createVisibleStreamEvent(
     event: ResponsesStreamEvent,
+    state: ResponsesStreamState,
   ): ChatStreamEvent | null {
     switch (event.type) {
       case "response.output_text.delta":
-        return event.delta
-          ? { type: "assistant_text", delta: event.delta }
-          : null;
+        if (!event.delta) {
+          return null;
+        }
+        return this.isCommentaryOutput(event, state)
+          ? { type: "thinking_delta", delta: event.delta }
+          : { type: "assistant_text", delta: event.delta };
       case "response.reasoning_summary_text.delta":
         return event.delta
           ? {
@@ -441,17 +449,46 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
   ): boolean {
     switch (event.type) {
       case "response.output_item.added":
+        this.captureOutputItemPhase(event, state);
         this.captureFunctionCall(event, state, false);
         return true;
       case "response.function_call_arguments.delta":
         this.captureFunctionArgumentsDelta(event, state);
         return true;
       case "response.output_item.done":
+        this.captureOutputItemPhase(event, state);
         this.captureCompletedItem(event, state);
         return true;
       default:
         return false;
     }
+  }
+
+  private isCommentaryOutput(
+    event: ResponsesStreamEvent,
+    state: ResponsesStreamState,
+  ): boolean {
+    return (
+      this.profile.routeCommentaryToThinking === true &&
+      state.outputItemPhasesByOutputIndex.get(event.output_index ?? 0) ===
+        "commentary"
+    );
+  }
+
+  private captureOutputItemPhase(
+    event: ResponsesStreamEvent,
+    state: ResponsesStreamState,
+  ): void {
+    if (
+      event.item?.type !== "message" ||
+      typeof event.item.phase !== "string"
+    ) {
+      return;
+    }
+    state.outputItemPhasesByOutputIndex.set(
+      event.output_index ?? 0,
+      event.item.phase,
+    );
   }
 
   private captureTerminalState(
