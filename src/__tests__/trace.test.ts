@@ -100,6 +100,57 @@ describe("withProviderTracing", () => {
     });
   });
 
+  it("completes the trace when consumption stops after the terminal event", async () => {
+    const provider: LLMProvider = {
+      name: "fixture",
+      getCapabilities: () => ({ contextWindowTokens: 1000 }),
+      async *streamChat(): AsyncIterable<ChatStreamEvent> {
+        yield { type: "terminal", stopReason: "end_turn" };
+        yield { type: "assistant_text", delta: "unread" };
+      },
+    };
+    const events: ProviderTraceEvent[] = [];
+
+    for await (const event of withProviderTracing(provider).streamChat(
+      request((traceEvent) => events.push(traceEvent)),
+    )) {
+      if (event.type === "terminal") break;
+    }
+
+    expect(events.map((event) => event.type)).toEqual([
+      "provider_request_started",
+      "provider_request_completed",
+    ]);
+    expect(events[1]).toMatchObject({ stopReason: "end_turn" });
+  });
+
+  it("fails the trace when consumption stops before a terminal event", async () => {
+    const provider: LLMProvider = {
+      name: "fixture",
+      getCapabilities: () => ({ contextWindowTokens: 1000 }),
+      async *streamChat(): AsyncIterable<ChatStreamEvent> {
+        yield { type: "assistant_text", delta: "partial" };
+        yield { type: "terminal", stopReason: "end_turn" };
+      },
+    };
+    const events: ProviderTraceEvent[] = [];
+
+    for await (const _event of withProviderTracing(provider).streamChat(
+      request((event) => events.push(event)),
+    )) {
+      break;
+    }
+
+    expect(events.map((event) => event.type)).toEqual([
+      "provider_request_started",
+      "provider_request_failed",
+    ]);
+    expect(events[1]).toMatchObject({
+      errorName: "AbortError",
+      message: "Provider stream consumption cancelled",
+    });
+  });
+
   it("isolates observer failures and reports provider failures", async () => {
     const failure = new Error("upstream failed");
     const provider: LLMProvider = {

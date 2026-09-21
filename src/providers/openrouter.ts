@@ -670,13 +670,14 @@ export class OpenRouterProvider extends OpenAiCompatibleProvider {
         isRetryable: (err) => this.isRetryableError(err),
         onDiagnosticEvent: (event) => this.emitDiagnostic(event),
       }),
-      onFinalRetry: () => {
+      onFinalRetry: ({ attempt }) => {
+        if (attempt === 0 || !request.tools?.length) return;
         dropTools = true;
         emitProviderRequestMutation({
           provider: this.name,
           request,
           mutation: "tools_removed",
-          appliesToAttemptNumber: (this.retryConfig?.maxRetries ?? 3) + 1,
+          appliesToAttemptNumber: attempt + 1,
           reason: "Final retry after an upstream failure",
         });
       },

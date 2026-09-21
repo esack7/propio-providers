@@ -251,6 +251,12 @@ class TracedProvider implements LLMProvider {
     });
   }
 
+  private emitCancelled(request: ChatRequest, startedAt: number): void {
+    const error = new Error("Provider stream consumption cancelled");
+    error.name = "AbortError";
+    this.emitFailed(request, startedAt, error);
+  }
+
   async *streamChat(request: ChatRequest): AsyncIterable<ChatStreamEvent> {
     const startedAt = performance.now();
     this.emitStarted(request);
@@ -258,6 +264,7 @@ class TracedProvider implements LLMProvider {
     let terminal:
       | { stopReason: StopReason; rawProviderReason?: string }
       | undefined;
+    let outcomeRecorded = false;
     try {
       for await (const event of this.provider.streamChat(request)) {
         if ("type" in event && event.type === "terminal") {
@@ -270,9 +277,19 @@ class TracedProvider implements LLMProvider {
       }
 
       this.emitCompleted(request, startedAt, terminal);
+      outcomeRecorded = true;
     } catch (error) {
       this.emitFailed(request, startedAt, error);
+      outcomeRecorded = true;
       throw error;
+    } finally {
+      if (!outcomeRecorded) {
+        if (terminal) {
+          this.emitCompleted(request, startedAt, terminal);
+        } else {
+          this.emitCancelled(request, startedAt);
+        }
+      }
     }
   }
 }

@@ -117,6 +117,10 @@ describe("withRetry", () => {
 
     expect(result).toBe("success");
     expect(onFinalRetry).toHaveBeenCalledTimes(1);
+    expect(onFinalRetry).toHaveBeenCalledWith({
+      attempt: 1,
+      maxRetries: 1,
+    });
     expect(fn).toHaveBeenCalledTimes(2); // initial attempt + final retry
   });
 
