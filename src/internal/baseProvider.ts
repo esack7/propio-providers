@@ -5,6 +5,7 @@ import type {
   ProviderDiagnosticListener,
   ProviderRetryConfig,
 } from "../diagnostics.js";
+import { createProviderRetryOptions } from "./shared.js";
 
 export interface BaseProviderOptions {
   model: string;
@@ -28,9 +29,25 @@ export abstract class BaseProvider implements LLMProvider {
   }
 
   // Public LLMProvider contract; callers receive providers through the factory interface.
-  // fallow-ignore-next-line unused-class-member
   getCapabilities(): ProviderCapabilities {
     return this.capabilities;
+  }
+
+  protected buildBaseRetryOptions(
+    request: ChatRequest,
+    isRetryable: (error: unknown) => boolean,
+    baseDelayMs = 500,
+  ) {
+    return createProviderRetryOptions({
+      request,
+      model: this.model,
+      provider: this.name,
+      retryConfig: this.retryConfig
+        ? { ...this.retryConfig, baseDelayMs }
+        : undefined,
+      isRetryable,
+      onDiagnosticEvent: this.onDiagnosticEvent,
+    });
   }
 
   abstract streamChat(request: ChatRequest): AsyncIterable<ChatStreamEvent>;

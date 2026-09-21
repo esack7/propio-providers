@@ -77,3 +77,12 @@ export type {
   ProviderDiagnosticListener,
   ProviderRetryConfig,
 } from "./diagnostics.js";
+
+// Explicit, headless request tracing
+export { withProviderTracing } from "./trace.js";
+export type {
+  ProviderRequestPurpose,
+  ProviderTraceContext,
+  ProviderTraceEvent,
+  ProviderTraceObserver,
+} from "./trace.js";

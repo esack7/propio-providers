@@ -87,17 +87,9 @@ export class BedrockProvider extends BaseProvider {
   }
 
   private createRetryOptions(request: ChatRequest) {
-    return {
-      maxRetries: this.retryConfig?.maxRetries ?? 3,
-      baseDelayMs: 500,
-      isRetryable: (error: unknown) => this.isRetryableError(error),
-      consecutive529Limit: this.retryConfig?.consecutive529Limit ?? 3,
-      onRetry: (ctx: {
-        err: unknown;
-        attempt: number;
-        delayMs: number;
-      }): void => this.emitRetryDiagnostic(request, ctx),
-    };
+    return this.buildBaseRetryOptions(request, (error) =>
+      this.isRetryableError(error),
+    );
   }
 
   private isRetryableError(error: unknown): boolean {
@@ -110,21 +102,6 @@ export class BedrockProvider extends BaseProvider {
       message.includes("rate limit") ||
       message.includes("throttl")
     );
-  }
-
-  private emitRetryDiagnostic(
-    request: ChatRequest,
-    ctx: { err: unknown; attempt: number; delayMs: number },
-  ): void {
-    this.onDiagnosticEvent?.({
-      type: "provider_retry",
-      provider: this.name,
-      model: request.model || this.model,
-      iteration: request.iteration ?? 0,
-      reason: ctx.err instanceof Error ? ctx.err.message : String(ctx.err),
-      attemptNumber: ctx.attempt + 1,
-      delayMs: ctx.delayMs,
-    });
   }
 
   private captureStopReason(event: any, state: BedrockStreamState): void {

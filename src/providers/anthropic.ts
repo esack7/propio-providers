@@ -15,7 +15,6 @@ import {
   ProviderCapacityError,
 } from "../types.js";
 import { withRetry } from "../internal/withRetry.js";
-import { createProviderRetryOptions } from "../internal/shared.js";
 
 // Default budget and min output headroom when extended thinking is enabled.
 const THINKING_BUDGET_TOKENS = 10000;
@@ -572,16 +571,9 @@ export class AnthropicProvider extends BaseProvider {
   ]);
 
   private createRetryOptions(request: ChatRequest) {
-    return createProviderRetryOptions({
-      request,
-      model: this.model,
-      provider: this.name,
-      retryConfig: this.retryConfig
-        ? { ...this.retryConfig, baseDelayMs: 500 }
-        : undefined,
-      isRetryable: (error) => this.isRetryableError(error),
-      onDiagnosticEvent: this.onDiagnosticEvent,
-    });
+    return this.buildBaseRetryOptions(request, (error) =>
+      this.isRetryableError(error),
+    );
   }
 
   // fallow-ignore-next-line complexity
