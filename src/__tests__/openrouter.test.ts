@@ -9,6 +9,7 @@ import {
 } from "../types.js";
 import { ChatRequest, ChatMessage } from "../types.js";
 import { ProviderDiagnosticEvent } from "../diagnostics.js";
+import type { ProviderTraceEvent } from "../trace.js";
 import {
   collectOpenRouterThinkingAndToolEvents,
   collectOpenRouterThinkingEvents,
@@ -24,6 +25,11 @@ const createProvider = OpenRouterTestFixture.createProvider;
 const setupFetchMock = OpenRouterTestFixture.setupFetchMock;
 const consumeStream = OpenRouterTestFixture.consumeStream;
 const collectDeltas = OpenRouterTestFixture.collectDeltas;
+const traceContext = {
+  requestId: "request-1",
+  operationId: "operation-1",
+  purpose: "answer" as const,
+};
 
 async function expectStatusError(
   status: number,
@@ -382,6 +388,7 @@ describe("OpenRouterProvider", () => {
 
     it("should retry once without tools after a 429 and succeed", async () => {
       const diagnosticEvents: ProviderDiagnosticEvent[] = [];
+      const traceEvents: ProviderTraceEvent[] = [];
       const { fetchMock, provider } =
         OpenRouterTestFixture.createRetrySuccessMock(429, "Recovered", {
           onDiagnosticEvent: (event: ProviderDiagnosticEvent) =>
@@ -389,7 +396,11 @@ describe("OpenRouterProvider", () => {
           iteration: 3,
         });
 
-      const request = makeToolCallRequest({ iteration: 3 });
+      const request = makeToolCallRequest({
+        iteration: 3,
+        trace: traceContext,
+        onTraceEvent: (event) => traceEvents.push(event),
+      });
       const content = await collectAssistantText(provider, request);
 
       expect(content).toBe("Recovered");
@@ -411,6 +422,61 @@ describe("OpenRouterProvider", () => {
           iteration: 3,
         }),
       );
+      expect(traceEvents).toContainEqual(
+        expect.objectContaining({
+          type: "provider_request_mutated",
+          mutation: "tools_removed",
+          appliesToAttemptNumber: 2,
+        }),
+      );
+    });
+
+    it("should preserve tools on the only attempt when retries are disabled", async () => {
+      const traceEvents: ProviderTraceEvent[] = [];
+      let body: Record<string, unknown> | undefined;
+      setupFetchMock(
+        [
+          'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+          "data: [DONE]\n\n",
+        ],
+        (captured) => {
+          body = captured as Record<string, unknown>;
+        },
+      );
+      const provider = createProvider("openai/gpt-3.5-turbo", "sk-test", {
+        maxRetries: 0,
+        baseDelayMs: 0,
+        consecutive529Limit: 3,
+      });
+
+      await consumeStream(
+        provider,
+        makeToolCallRequest({
+          trace: traceContext,
+          onTraceEvent: (event) => traceEvents.push(event),
+        }),
+      );
+
+      expect(body?.tools).toHaveLength(1);
+      expect(
+        traceEvents.some((event) => event.type === "provider_request_mutated"),
+      ).toBe(false);
+    });
+
+    it("should not report tool removal when a request has no tools", async () => {
+      const traceEvents: ProviderTraceEvent[] = [];
+      const { provider } = OpenRouterTestFixture.createRetrySuccessMock(503);
+
+      await consumeStream(provider, {
+        model: "openai/gpt-3.5-turbo",
+        messages: [{ role: "user", content: "Hello" }],
+        trace: traceContext,
+        onTraceEvent: (event) => traceEvents.push(event),
+      });
+
+      expect(
+        traceEvents.some((event) => event.type === "provider_request_mutated"),
+      ).toBe(false);
     });
 
     it("should normalize DSML tool markup during a retry without native tools", async () => {

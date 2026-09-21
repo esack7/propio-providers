@@ -139,6 +139,12 @@ The provider reads only the namespaced `META_API_KEY` environment variable; it d
 
 Pass a `ProviderDiagnosticListener` to `createProvider` to receive `ProviderDiagnosticEvent`s (currently `provider_retry`, emitted when a request is retried).
 
+### Request tracing
+
+`ChatRequest.trace` accepts caller-owned session, run, turn, request, and operation identities plus a request purpose. `ChatRequest.onTraceEvent` observes logical request and network-attempt lifecycle events without creating files or discovering application directories. Observer failures are isolated from provider behavior.
+
+Providers created through the normal factory emit attempt start, connection, failure, and retry-wait records from the shared retry machinery. OpenRouter additionally records its final-retry tools-removal mutation. Wrap any `LLMProvider` with `withProviderTracing(provider)` to add logical request start/completion/failure records while preserving the streamed event contract. The wrapper is explicit so `createProvider` continues returning the concrete adapter type for compatibility.
+
 ## Development
 
 ```bash

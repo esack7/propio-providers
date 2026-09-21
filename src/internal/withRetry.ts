@@ -12,6 +12,19 @@ export interface RetryContext {
   err: unknown;
 }
 
+export interface AttemptContext {
+  attempt: number;
+  maxRetries: number;
+}
+
+export interface AttemptResultContext extends AttemptContext {
+  durationMs: number;
+}
+
+export interface AttemptFailureContext extends AttemptResultContext {
+  err: unknown;
+}
+
 export interface WithRetryOptions {
   maxRetries: number;
   baseDelayMs?: number; // default 500
@@ -20,8 +33,11 @@ export interface WithRetryOptions {
   is529?: (err: unknown) => boolean;
   consecutive529Limit?: number; // default 3
   on529Fallback?: () => void;
-  onFinalRetry?: () => void; // called before final attempt — may mutate closure state
+  onFinalRetry?: (ctx: AttemptContext) => void; // called before final attempt — may mutate closure state
   onRetry?: (ctx: RetryContext) => void;
+  onAttemptStart?: (ctx: AttemptContext) => void;
+  onAttemptSuccess?: (ctx: AttemptResultContext) => void;
+  onAttemptFailure?: (ctx: AttemptFailureContext) => void;
 }
 
 function trackConsecutive529s(
@@ -67,19 +83,36 @@ export async function withRetry<T>(
     isRetryable,
     onFinalRetry,
     onRetry,
+    onAttemptStart,
+    onAttemptSuccess,
+    onAttemptFailure,
   } = opts;
 
   let consecutive529s = 0;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const startedAt = performance.now();
     try {
       // Call onFinalRetry before the last attempt (it may mutate closure state used by fn)
       if (attempt === maxRetries && onFinalRetry) {
-        onFinalRetry();
+        onFinalRetry({ attempt, maxRetries });
       }
 
-      return await fn();
+      onAttemptStart?.({ attempt, maxRetries });
+      const result = await fn();
+      onAttemptSuccess?.({
+        attempt,
+        maxRetries,
+        durationMs: performance.now() - startedAt,
+      });
+      return result;
     } catch (err) {
+      onAttemptFailure?.({
+        attempt,
+        maxRetries,
+        durationMs: performance.now() - startedAt,
+        err,
+      });
       consecutive529s = trackConsecutive529s(err, consecutive529s, opts);
 
       // Don't retry if error is not retryable or we've exhausted budget

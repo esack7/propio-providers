@@ -8,6 +8,7 @@ import type {
 } from "../types.js";
 import { ProviderCapacityError } from "../types.js";
 import type { WithRetryOptions } from "./withRetry.js";
+import { createProviderAttemptTraceHooks } from "../trace.js";
 
 export interface OpenAIToolDefinition {
   readonly type: "function";
@@ -106,12 +107,18 @@ export function createProviderRetryOptions(options: {
   isRetryable: (err: unknown) => boolean;
   onDiagnosticEvent?: ProviderDiagnosticListener;
 }): WithRetryOptions {
+  const traceHooks = createProviderAttemptTraceHooks({
+    provider: options.provider,
+    request: options.request,
+  });
   const retryOptions: WithRetryOptions = {
     maxRetries: options.retryConfig?.maxRetries ?? 3,
     isRetryable: options.isRetryable,
     is529: (err) => err instanceof ProviderCapacityError,
     consecutive529Limit: options.retryConfig?.consecutive529Limit ?? 3,
-    onRetry: (ctx) =>
+    ...traceHooks,
+    onRetry: (ctx) => {
+      traceHooks.onRetry?.(ctx);
       options.onDiagnosticEvent?.({
         type: "provider_retry",
         provider: options.provider,
@@ -120,7 +127,8 @@ export function createProviderRetryOptions(options: {
         reason: ctx.err instanceof Error ? ctx.err.message : String(ctx.err),
         attemptNumber: ctx.attempt + 1,
         delayMs: ctx.delayMs,
-      }),
+      });
+    },
   };
 
   if (options.retryConfig?.baseDelayMs !== undefined) {

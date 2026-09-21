@@ -28,6 +28,7 @@ import type {
 } from "../diagnostics.js";
 import type { OpenRouterRoutingConfig } from "../config.js";
 import { OpenAiCompatibleProvider } from "../internal/openAiCompatibleProvider.js";
+import { emitProviderRequestMutation } from "../trace.js";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DSML_TOOL_CALL_START_TOKENS = [
@@ -669,8 +670,16 @@ export class OpenRouterProvider extends OpenAiCompatibleProvider {
         isRetryable: (err) => this.isRetryableError(err),
         onDiagnosticEvent: (event) => this.emitDiagnostic(event),
       }),
-      onFinalRetry: () => {
+      onFinalRetry: ({ attempt }) => {
+        if (attempt === 0 || !request.tools?.length) return;
         dropTools = true;
+        emitProviderRequestMutation({
+          provider: this.name,
+          request,
+          mutation: "tools_removed",
+          appliesToAttemptNumber: attempt + 1,
+          reason: "Final retry after an upstream failure",
+        });
       },
     });
   }

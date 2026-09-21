@@ -73,6 +73,10 @@ export interface ChatRequest {
    * tokens. Providers that do not support this should ignore it.
    */
   requestReasoning?: boolean;
+  /** Optional caller-supplied causal identity. No storage is created implicitly. */
+  trace?: import("./trace.js").ProviderTraceContext;
+  /** Optional request observer. Exceptions are isolated from provider behavior. */
+  onTraceEvent?: import("./trace.js").ProviderTraceObserver;
 }
 
 /**
