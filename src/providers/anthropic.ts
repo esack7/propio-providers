@@ -16,7 +16,10 @@ import {
 } from "../types.js";
 import { withRetry } from "../internal/withRetry.js";
 import { emitProviderResponseMetadata } from "../trace.js";
-import { emitNormalizedProviderUsage } from "../internal/providerMeasurements.js";
+import {
+  emitNormalizedProviderUsage,
+  type ProviderTokenUsageInput,
+} from "../internal/providerMeasurements.js";
 
 // Default budget and min output headroom when extended thinking is enabled.
 const THINKING_BUDGET_TOKENS = 10000;
@@ -60,6 +63,7 @@ interface AnthropicStreamState {
   thinkingBlocks: AnthropicReplayBlock[];
   stopReason: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence";
   rawStopReason: string;
+  usage: ProviderTokenUsageInput;
 }
 
 export class AnthropicProvider extends BaseProvider {
@@ -142,11 +146,12 @@ export class AnthropicProvider extends BaseProvider {
         thinkingBlocks: [],
         stopReason: "end_turn",
         rawStopReason: "end_turn",
+        usage: {},
       };
 
       for await (const event of stream) {
         if (event.type === "message_start") {
-          this.captureMessageStartTrace(event, request);
+          this.captureMessageStartTrace(event, request, state);
         } else if (event.type === "content_block_start") {
           this.handleContentBlockStart(
             event as Anthropic.RawContentBlockStartEvent,
@@ -172,7 +177,7 @@ export class AnthropicProvider extends BaseProvider {
             state.rawStopReason = deltaEvent.delta.stop_reason;
             state.stopReason = this.mapStopReason(deltaEvent.delta.stop_reason);
           }
-          this.captureMessageDeltaUsage(deltaEvent, request);
+          this.captureMessageDeltaUsage(deltaEvent, request, state);
         }
       }
 
@@ -202,6 +207,7 @@ export class AnthropicProvider extends BaseProvider {
   private captureMessageStartTrace(
     event: Anthropic.RawMessageStartEvent,
     request: ChatRequest,
+    state: AnthropicStreamState,
   ): void {
     emitProviderResponseMetadata({
       provider: this.name,
@@ -210,31 +216,58 @@ export class AnthropicProvider extends BaseProvider {
       upstreamRequestId: event.message.id,
       actualModel: event.message.model,
     });
-    this.emitAnthropicUsage(event.message.usage, request);
+    state.usage = this.mapAnthropicUsage(event.message.usage);
+    this.emitAnthropicUsage(state.usage, request);
   }
 
   private captureMessageDeltaUsage(
     event: Anthropic.RawMessageDeltaEvent,
     request: ChatRequest,
+    state: AnthropicStreamState,
   ): void {
-    this.emitAnthropicUsage(event.usage, request);
+    const delta = this.mapAnthropicUsage(event.usage);
+    if (!Object.values(delta).some((value) => value !== undefined)) return;
+    state.usage = this.mergeAnthropicUsage(state.usage, delta);
+    this.emitAnthropicUsage(state.usage, request);
+  }
+
+  private mapAnthropicUsage(
+    usage: Anthropic.Usage | Anthropic.MessageDeltaUsage,
+  ): ProviderTokenUsageInput {
+    return {
+      inputTokens: usage.input_tokens,
+      outputTokens: usage.output_tokens,
+      cacheReadInputTokens: usage.cache_read_input_tokens,
+      cacheWriteInputTokens: usage.cache_creation_input_tokens,
+      reasoningTokens: usage.output_tokens_details?.thinking_tokens,
+    };
+  }
+
+  private mergeAnthropicUsage(
+    current: ProviderTokenUsageInput,
+    update: ProviderTokenUsageInput,
+  ): ProviderTokenUsageInput {
+    return {
+      inputTokens: update.inputTokens ?? current.inputTokens,
+      outputTokens: update.outputTokens ?? current.outputTokens,
+      cacheReadInputTokens:
+        update.cacheReadInputTokens ?? current.cacheReadInputTokens,
+      cacheWriteInputTokens:
+        update.cacheWriteInputTokens ?? current.cacheWriteInputTokens,
+      reasoningTokens: update.reasoningTokens ?? current.reasoningTokens,
+      totalTokens: update.totalTokens ?? current.totalTokens,
+    };
   }
 
   private emitAnthropicUsage(
-    usage: Anthropic.Usage | Anthropic.MessageDeltaUsage,
+    usage: ProviderTokenUsageInput,
     request: ChatRequest,
   ): void {
     emitNormalizedProviderUsage({
       provider: this.name,
       request,
       endpointClass: "messages",
-      usage: {
-        inputTokens: usage.input_tokens,
-        outputTokens: usage.output_tokens,
-        cacheReadInputTokens: usage.cache_read_input_tokens,
-        cacheWriteInputTokens: usage.cache_creation_input_tokens,
-        reasoningTokens: usage.output_tokens_details?.thinking_tokens,
-      },
+      usage,
     });
   }
 

@@ -9,7 +9,7 @@ import {
   type StopReason,
 } from "../types.js";
 import type { ProviderDiagnosticListener } from "../diagnostics.js";
-import { withRetry } from "../internal/withRetry.js";
+import { withRetry, type WithRetryOptions } from "../internal/withRetry.js";
 import {
   buildOpenAIChatCompletionRequestBody,
   createResponsesFunctionTool,
@@ -49,6 +49,7 @@ export class XaiProvider extends OpenAiCompatibleProvider {
   private readonly apiKey: string;
   private readonly retryConfig?: OpenAiCompatibleRetryConfig;
   private readonly onDiagnosticEvent?: ProviderDiagnosticListener;
+  private readonly endpointFallbackErrors = new WeakSet<object>();
 
   constructor(options: OpenAiCompatibleProviderOptions) {
     super();
@@ -75,10 +76,14 @@ export class XaiProvider extends OpenAiCompatibleProvider {
       // ignore read failures
     }
 
-    return this.translateError(
+    const error = this.translateError(
       new Error(errorBody || `HTTP ${response.status}`),
       response,
     );
+    if (response.status >= 500 && response.status < 600) {
+      this.endpointFallbackErrors.add(error);
+    }
+    return error;
   }
 
   private async createPostResponse(
@@ -98,7 +103,15 @@ export class XaiProvider extends OpenAiCompatibleProvider {
         signal,
       });
     } catch (error) {
-      throw error instanceof ProviderError ? error : this.translateError(error);
+      const translated =
+        error instanceof ProviderError ? error : this.translateError(error);
+      if (
+        !(error instanceof ProviderError) &&
+        !this.isCancellation(translated)
+      ) {
+        this.endpointFallbackErrors.add(translated);
+      }
+      throw translated;
     }
     if (!response.ok) throw await this.createEndpointResponseError(response);
     return response;
@@ -154,29 +167,19 @@ export class XaiProvider extends OpenAiCompatibleProvider {
     reader: ReadableStreamDefaultReader<Uint8Array>;
     endpointClass: string;
   }> {
+    const retryState: XaiEndpointRetryState = {
+      endpointIndex: 0,
+      logicalRetryCount: 0,
+      nextRetry: "logical_retry",
+    };
     let endpointClass = this.xaiEndpointClass(apiUrls[0]!);
     const response = await withRetry(
-      ({ attempt }) => {
-        const apiUrl = apiUrls[attempt % apiUrls.length]!;
+      () => {
+        const apiUrl = apiUrls[retryState.endpointIndex]!;
         endpointClass = this.xaiEndpointClass(apiUrl);
         return this.createPostResponse(apiUrl, body, request.signal);
       },
-      {
-        ...this.buildRetryOptions(
-          request,
-          this.model,
-          this.endpointRetryConfig(apiUrls.length),
-          this.onDiagnosticEvent,
-          (attemptNumber) =>
-            this.xaiEndpointClass(
-              apiUrls[(attemptNumber - 1) % apiUrls.length]!,
-            ),
-        ),
-        getBackoffAttempt: (attempt: number) =>
-          (attempt + 1) % apiUrls.length === 0
-            ? Math.floor(attempt / apiUrls.length)
-            : null,
-      },
+      this.buildEndpointRetryOptions(request, apiUrls, retryState),
     );
 
     const reader = this.getResponseReader(response);
@@ -185,6 +188,69 @@ export class XaiProvider extends OpenAiCompatibleProvider {
     }
 
     return { reader, endpointClass };
+  }
+
+  private buildEndpointRetryOptions(
+    request: ChatRequest,
+    apiUrls: readonly string[],
+    state: XaiEndpointRetryState,
+  ): WithRetryOptions {
+    const configuredRetries = this.retryConfig?.maxRetries ?? 3;
+    const base = this.buildRetryOptions(
+      request,
+      this.model,
+      this.endpointRetryConfig(apiUrls.length),
+      this.onDiagnosticEvent,
+      () => this.xaiEndpointClass(apiUrls[state.endpointIndex]!),
+    );
+    const baseOnRetry = base.onRetry;
+
+    return {
+      ...base,
+      isRetryable: (error) => {
+        if (this.isCancellation(error) || !base.isRetryable(error)) {
+          return false;
+        }
+        if (
+          this.isEndpointFallbackError(error) &&
+          state.endpointIndex < apiUrls.length - 1
+        ) {
+          state.nextRetry = "endpoint_fallback";
+          return true;
+        }
+        state.nextRetry = "logical_retry";
+        return state.logicalRetryCount < configuredRetries;
+      },
+      getBackoffAttempt: () =>
+        state.nextRetry === "endpoint_fallback"
+          ? null
+          : state.logicalRetryCount,
+      onRetry: (context) => {
+        baseOnRetry?.(context);
+        if (state.nextRetry === "endpoint_fallback") {
+          state.endpointIndex += 1;
+        } else {
+          state.endpointIndex = 0;
+          state.logicalRetryCount += 1;
+        }
+      },
+    };
+  }
+
+  private isEndpointFallbackError(error: unknown): boolean {
+    return typeof error === "object" && error !== null
+      ? this.endpointFallbackErrors.has(error)
+      : false;
+  }
+
+  private isCancellation(error: unknown): boolean {
+    return (
+      error instanceof Error &&
+      (error.name === "AbortError" ||
+        error.message === "Request cancelled" ||
+        (error instanceof ProviderError &&
+          error.originalError?.name === "AbortError"))
+    );
   }
 
   private endpointRetryConfig(endpointCount: number): {
@@ -603,6 +669,12 @@ interface ResponsesFunctionCall {
   name?: string;
   arguments?: string;
   argsString?: string;
+}
+
+interface XaiEndpointRetryState {
+  endpointIndex: number;
+  logicalRetryCount: number;
+  nextRetry: "endpoint_fallback" | "logical_retry";
 }
 
 interface ResponsesStreamLineResult {

@@ -1,5 +1,6 @@
 import { XaiProvider } from "../providers/xai.js";
 import type { ProviderTraceEvent } from "../trace.js";
+import { ProviderRateLimitError } from "../types.js";
 import {
   OPENAI_COMPATIBLE_PROVIDER_TEST_ENV,
   OpenRouterTestFixture,
@@ -270,6 +271,7 @@ describe("XaiProvider", () => {
         "https://us-east-1.api.x.ai/v1/chat/completions",
         expect.any(Object),
       );
+      expect(fetch).toHaveBeenCalledTimes(2);
       const attempts = traceEvents.filter(
         (event) => event.type === "provider_attempt_started",
       );
@@ -279,6 +281,71 @@ describe("XaiProvider", () => {
         "chat_completions:us_east_1",
       ]);
       expect(new Set(attempts.map((event) => event.attemptId)).size).toBe(2);
+    });
+
+    it("retries rate limits on the global endpoint without regional bursts", async () => {
+      const traceEvents: ProviderTraceEvent[] = [];
+      const random = jest.spyOn(Math, "random").mockReturnValue(0.5);
+      globalThis.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        headers: new Map([["retry-after", "1"]]),
+        text: () => Promise.resolve("rate limited"),
+      });
+
+      await expectStreamChatToThrow(
+        createProvider({
+          retryConfig: {
+            maxRetries: 1,
+            consecutive529Limit: 3,
+            baseDelayMs: 10,
+          },
+        }),
+        ProviderRateLimitError,
+        {
+          ...DEFAULT_REQUEST,
+          trace: {
+            requestId: "request-1",
+            operationId: "operation-1",
+            purpose: "answer",
+          },
+          onTraceEvent: (event) => traceEvents.push(event),
+        },
+      );
+
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect((fetch as jest.Mock).mock.calls.map(([url]) => url)).toEqual([
+        "https://api.x.ai/v1/chat/completions",
+        "https://api.x.ai/v1/chat/completions",
+      ]);
+      expect(
+        traceEvents
+          .filter((event) => event.type === "provider_attempt_started")
+          .map((event) => event.endpointClass),
+      ).toEqual(["chat_completions:global", "chat_completions:global"]);
+      expect(
+        traceEvents.find((event) => event.type === "provider_retry_wait"),
+      ).toEqual(expect.objectContaining({ delayMs: 5 }));
+      random.mockRestore();
+    });
+
+    it("does not retry cancelled requests", async () => {
+      const abortError = new Error("The operation was aborted");
+      abortError.name = "AbortError";
+      globalThis.fetch = jest.fn().mockRejectedValue(abortError);
+
+      await expectStreamChatToThrow(
+        createProvider({
+          retryConfig: {
+            maxRetries: 3,
+            consecutive529Limit: 3,
+            baseDelayMs: 0,
+          },
+        }),
+        /Request cancelled/,
+      );
+
+      expect(fetch).toHaveBeenCalledTimes(1);
     });
   });
 

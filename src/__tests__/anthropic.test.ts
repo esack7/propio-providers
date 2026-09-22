@@ -888,7 +888,11 @@ describe("AnthropicProvider", () => {
             },
           },
         },
-        ...textStreamEvents("ok"),
+        ...textStreamEvents("ok").map((event) =>
+          event.type === "message_delta"
+            ? { ...event, usage: { output_tokens: 7 } }
+            : event,
+        ),
       ]),
     );
 
@@ -912,18 +916,23 @@ describe("AnthropicProvider", () => {
           upstreamRequestId: "msg_123",
           actualModel: SONNET_46_MODEL,
         }),
-        expect.objectContaining({
-          type: "provider_usage_reported",
-          availability: "reported",
-          reportKind: "cumulative",
-          usage: expect.objectContaining({
-            inputTokens: 10,
-            outputTokens: 0,
-            cacheReadInputTokens: 3,
-            cacheWriteInputTokens: 2,
-          }),
-        }),
       ]),
+    );
+    const usageEvents = traceEvents.filter(
+      (event) => event.type === "provider_usage_reported",
+    );
+    expect(usageEvents).toHaveLength(2);
+    expect(usageEvents.at(-1)).toEqual(
+      expect.objectContaining({
+        availability: "reported",
+        reportKind: "cumulative",
+        usage: expect.objectContaining({
+          inputTokens: 10,
+          outputTokens: 7,
+          cacheReadInputTokens: 3,
+          cacheWriteInputTokens: 2,
+        }),
+      }),
     );
   });
 });
