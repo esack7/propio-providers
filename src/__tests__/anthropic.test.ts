@@ -39,6 +39,7 @@ import {
   ProviderContextLengthError,
   ProviderError,
 } from "../types.js";
+import type { ProviderTraceEvent } from "../trace.js";
 
 let AnthropicProvider: any;
 
@@ -867,5 +868,71 @@ describe("AnthropicProvider", () => {
         collectStream(createTestProvider(), createChatRequest()),
       ).rejects.toBeInstanceOf(ProviderError);
     });
+  });
+
+  it("reports response identity and cumulative usage", async () => {
+    const traceEvents: ProviderTraceEvent[] = [];
+    mockStream.mockResolvedValue(
+      makeStream([
+        {
+          type: "message_start",
+          message: {
+            id: "msg_123",
+            model: SONNET_46_MODEL,
+            usage: {
+              input_tokens: 10,
+              output_tokens: 0,
+              cache_read_input_tokens: 3,
+              cache_creation_input_tokens: 2,
+              output_tokens_details: { thinking_tokens: 0 },
+            },
+          },
+        },
+        ...textStreamEvents("ok").map((event) =>
+          event.type === "message_delta"
+            ? { ...event, usage: { output_tokens: 7 } }
+            : event,
+        ),
+      ]),
+    );
+
+    await collectStream(
+      createTestProvider(),
+      createChatRequest("hello", {
+        trace: {
+          requestId: "request-1",
+          operationId: "operation-1",
+          purpose: "answer",
+        },
+        onTraceEvent: (event) => traceEvents.push(event),
+      }),
+    );
+
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "provider_response_metadata",
+          endpointClass: "messages",
+          upstreamRequestId: "msg_123",
+          actualModel: SONNET_46_MODEL,
+        }),
+      ]),
+    );
+    const usageEvents = traceEvents.filter(
+      (event) => event.type === "provider_usage_reported",
+    );
+    expect(usageEvents).toHaveLength(2);
+    expect(usageEvents.at(-1)).toEqual(
+      expect.objectContaining({
+        availability: "reported",
+        reportKind: "cumulative",
+        usage: expect.objectContaining({
+          inputTokens: 10,
+          outputTokens: 7,
+          cacheReadInputTokens: 3,
+          cacheWriteInputTokens: 2,
+        }),
+      }),
+    );
   });
 });

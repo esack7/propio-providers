@@ -145,6 +145,24 @@ Pass a `ProviderDiagnosticListener` to `createProvider` to receive `ProviderDiag
 
 Providers created through the normal factory emit attempt start, connection, failure, and retry-wait records from the shared retry machinery. OpenRouter additionally records its final-retry tools-removal mutation. Wrap any `LLMProvider` with `withProviderTracing(provider)` to add logical request start/completion/failure records while preserving the streamed event contract. The wrapper is explicit so `createProvider` continues returning the concrete adapter type for compatibility.
 
+Attempt records include a stable attempt ID, attempt number, endpoint class, connection time, first-useful-output time, and terminal duration. Response metadata records the upstream request ID and actual routed model when the provider exposes them. xAI regional fallback requests are separate attempts rather than an opaque operation inside one retry.
+
+Usage records keep input, output, cache-read, cache-write, reasoning, and total token counters distinct. Each report is marked as cumulative or delta and as reported, partial, or unavailable; missing values are never converted to zero. OpenRouter's provider-reported USD charge is retained separately when present. Reasoning tokens remain part of output tokens for providers that document them as an output-token breakdown.
+
+| Adapter    | Trace availability                                                                                                  |
+| ---------- | ------------------------------------------------------------------------------------------------------------------- |
+| Anthropic  | Message ID, actual model, cumulative input/output/cache/thinking usage, raw stop reason                             |
+| Bedrock    | AWS request ID, cumulative input/output/cache usage, raw stop reason; no separately returned actual model           |
+| Ollama     | Actual model and final prompt/evaluation counts; no upstream request ID                                             |
+| OpenRouter | Response ID, routed model, cumulative usage and reported charge, raw stop reason, tools-removal mutation            |
+| OpenAI     | Responses ID/model, cumulative input/output/cache/reasoning usage, raw response status                              |
+| Meta       | Responses ID/model, cumulative input/output/cache/reasoning usage, raw response status                              |
+| Gemini     | OpenAI-compatible or native Gemini usage fields, response ID/model when supplied, raw finish reason                 |
+| xAI        | Response ID/model and usage when supplied, raw finish reason/status, distinct global and regional endpoint attempts |
+| Cloudflare | OpenAI-compatible response ID/model and usage when supplied, raw finish reason                                      |
+
+Adapter events are emitted only from fields actually returned by the installed SDK or wire response. When a traced logical request completes without any provider usage report, `withProviderTracing` emits one explicit `unavailable` usage record linked to the final attempt.
+
 ## Development
 
 ```bash

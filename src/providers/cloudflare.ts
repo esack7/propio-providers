@@ -168,6 +168,7 @@ export class CloudflareProvider extends OpenAiCompatibleProvider {
           this.model,
           this.retryConfig,
           this.onDiagnosticEvent,
+          "chat_completions",
         ),
         translateError: (error) => this.translateError(error),
       });
@@ -176,7 +177,11 @@ export class CloudflareProvider extends OpenAiCompatibleProvider {
         number,
         OpenAIStreamToolCallAccumulator
       >();
-      yield* consumeOpenAiChatCompletionsStream(reader, toolCallsByIndex);
+      yield* consumeOpenAiChatCompletionsStream(reader, toolCallsByIndex, {
+        provider: this.name,
+        request,
+        endpointClass: "chat_completions",
+      });
     } catch (error) {
       if (error instanceof ProviderError) throw error;
       throw this.translateError(error);

@@ -19,19 +19,25 @@ import {
   createProviderRetryOptions,
   expandToolResultMessages,
 } from "../internal/shared.js";
+import { emitProviderResponseMetadata } from "../trace.js";
+import { emitNormalizedProviderUsage } from "../internal/providerMeasurements.js";
 
 interface OllamaStreamChunk {
+  model?: string;
   message: {
     content?: string;
     thinking?: string;
     tool_calls?: ToolCall[];
   };
   done_reason?: string;
+  prompt_eval_count?: number;
+  eval_count?: number;
 }
 
 interface OllamaStreamState {
   lastToolCalls?: ChatToolCall[];
   stopReason: string;
+  rawStopReason?: string;
 }
 
 interface OllamaErrorPattern {
@@ -179,6 +185,7 @@ export class OllamaProvider implements LLMProvider {
         retryConfig: this.retryConfig,
         isRetryable: (err) => this.isRetryableError(err),
         onDiagnosticEvent: this.onDiagnosticEvent,
+        endpointClass: "ollama_chat",
       }),
     );
   }
@@ -205,9 +212,32 @@ export class OllamaProvider implements LLMProvider {
       );
     }
     if (chunk.done_reason) {
+      state.rawStopReason = chunk.done_reason;
       state.stopReason = this.mapOllamaDoneReason(chunk.done_reason);
+      this.captureOllamaMeasurements(chunk, request);
     }
     return events;
+  }
+
+  private captureOllamaMeasurements(
+    chunk: OllamaStreamChunk,
+    request: ChatRequest,
+  ): void {
+    emitProviderResponseMetadata({
+      provider: this.name,
+      request,
+      endpointClass: "ollama_chat",
+      ...(chunk.model ? { actualModel: chunk.model } : {}),
+    });
+    emitNormalizedProviderUsage({
+      provider: this.name,
+      request,
+      endpointClass: "ollama_chat",
+      usage: {
+        inputTokens: chunk.prompt_eval_count,
+        outputTokens: chunk.eval_count,
+      },
+    });
   }
 
   private buildOllamaToolCallsEvent(
@@ -245,7 +275,11 @@ export class OllamaProvider implements LLMProvider {
         yield toolCallsEvent;
       }
 
-      yield { type: "terminal", stopReason: state.stopReason as any };
+      yield {
+        type: "terminal",
+        stopReason: state.stopReason as any,
+        rawProviderReason: state.rawStopReason,
+      };
     } catch (error) {
       throw this.translateError(error);
     }

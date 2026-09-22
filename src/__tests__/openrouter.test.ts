@@ -961,6 +961,7 @@ describe("OpenRouterProvider", () => {
         model: "openai/gpt-3.5-turbo",
         messages: [{ role: "user", content: "Hello" }],
         stream: true,
+        stream_options: { include_usage: true },
         provider: {
           allow_fallbacks: false,
           order: ["provider-a", "provider-b"],
@@ -1231,5 +1232,42 @@ describe("OpenRouterProvider", () => {
         tool_call_id: "call2",
       });
     });
+  });
+
+  it("reports routed model identity, token usage, and provider charge", async () => {
+    const traceEvents: ProviderTraceEvent[] = [];
+    globalThis.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      body: createSseStream([
+        'data: {"id":"or-response-1","model":"anthropic/claude-sonnet-4.6","choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":6,"total_tokens":26,"cost":0.00042}}\n\n',
+        "data: [DONE]\n\n",
+      ]),
+    });
+
+    await consumeStream(createProvider(), {
+      model: "openai/gpt-3.5-turbo",
+      messages: [{ role: "user", content: "hello" }],
+      trace: traceContext,
+      onTraceEvent: (event) => traceEvents.push(event),
+    });
+
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "provider_response_metadata",
+          upstreamRequestId: "or-response-1",
+          actualModel: "anthropic/claude-sonnet-4.6",
+        }),
+        expect.objectContaining({
+          type: "provider_usage_reported",
+          availability: "reported",
+          usage: expect.objectContaining({
+            inputTokens: 20,
+            outputTokens: 6,
+          }),
+          providerReportedCost: { amount: 0.00042, currency: "USD" },
+        }),
+      ]),
+    );
   });
 });

@@ -106,10 +106,12 @@ export function createProviderRetryOptions(options: {
   };
   isRetryable: (err: unknown) => boolean;
   onDiagnosticEvent?: ProviderDiagnosticListener;
+  endpointClass?: string | ((attemptNumber: number) => string);
 }): WithRetryOptions {
   const traceHooks = createProviderAttemptTraceHooks({
     provider: options.provider,
     request: options.request,
+    endpointClass: options.endpointClass,
   });
   const retryOptions: WithRetryOptions = {
     maxRetries: options.retryConfig?.maxRetries ?? 3,

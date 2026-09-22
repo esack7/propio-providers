@@ -9,6 +9,7 @@ import {
   ProviderRateLimitError,
 } from "../types.js";
 import { OpenRouterTestFixture } from "./openrouterTestHelpers.js";
+import type { ProviderTraceEvent } from "../trace.js";
 
 const DEFAULT_REQUEST: ChatRequest = {
   model: "muse-spark-1.1",
@@ -133,7 +134,11 @@ describe("MetaProvider", () => {
       const events = await collectEvents(createProvider());
       expect(events).toEqual([
         { type: "assistant_text", delta: "Hello Meta" },
-        { type: "terminal", stopReason: "end_turn" },
+        {
+          type: "terminal",
+          stopReason: "end_turn",
+          rawProviderReason: "completed",
+        },
       ]);
       expect(fetch).toHaveBeenCalledWith(
         "https://api.meta.ai/v1/responses",
@@ -192,7 +197,11 @@ describe("MetaProvider", () => {
         { type: "thinking_delta", delta: "check them." },
         { type: "assistant_text", delta: "Here is " },
         { type: "assistant_text", delta: "the answer." },
-        { type: "terminal", stopReason: "end_turn" },
+        {
+          type: "terminal",
+          stopReason: "end_turn",
+          rawProviderReason: "completed",
+        },
       ]);
     });
 
@@ -391,7 +400,11 @@ describe("MetaProvider", () => {
           secondCall,
         ]),
       });
-      expect(events[5]).toEqual({ type: "terminal", stopReason: "tool_use" });
+      expect(events[5]).toEqual({
+        type: "terminal",
+        stopReason: "tool_use",
+        rawProviderReason: "completed",
+      });
     });
 
     it("replays completed output items exactly once before tool results", async () => {
@@ -571,7 +584,12 @@ describe("MetaProvider", () => {
           ]),
         );
       const events = await collectEvents(createProvider());
-      expect(events.at(-1)).toEqual({ type: "terminal", stopReason });
+      expect(events.at(-1)).toEqual({
+        type: "terminal",
+        stopReason,
+        rawProviderReason:
+          eventType === "response.incomplete" ? "incomplete" : eventType,
+      });
     });
   });
 
@@ -674,5 +692,45 @@ describe("MetaProvider", () => {
       );
       expect(fetch).toHaveBeenCalledTimes(1);
     });
+  });
+  it("reports Meta Responses identity and usage through the shared contract", async () => {
+    const traceEvents: ProviderTraceEvent[] = [];
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        successfulResponse([
+          'data: {"type":"response.output_text.delta","delta":"ok"}\n\n',
+          'data: {"type":"response.completed","response":{"id":"meta_resp_1","model":"muse-spark-1.1","status":"completed","usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7}}}\n\n',
+        ]),
+      );
+
+    await collectEvents(createProvider(), {
+      ...DEFAULT_REQUEST,
+      trace: {
+        requestId: "request-1",
+        operationId: "operation-1",
+        purpose: "answer",
+      },
+      onTraceEvent: (event) => traceEvents.push(event),
+    });
+
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "provider_response_metadata",
+          upstreamRequestId: "meta_resp_1",
+          actualModel: "muse-spark-1.1",
+        }),
+        expect.objectContaining({
+          type: "provider_usage_reported",
+          availability: "reported",
+          usage: expect.objectContaining({
+            inputTokens: 5,
+            outputTokens: 2,
+            totalTokens: 7,
+          }),
+        }),
+      ]),
+    );
   });
 });

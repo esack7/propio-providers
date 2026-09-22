@@ -82,7 +82,10 @@ export type {
 export { withProviderTracing } from "./trace.js";
 export type {
   ProviderRequestPurpose,
+  ProviderReportedCost,
+  ProviderTokenUsage,
   ProviderTraceContext,
   ProviderTraceEvent,
   ProviderTraceObserver,
+  ProviderUsageAvailability,
 } from "./trace.js";

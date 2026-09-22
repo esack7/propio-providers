@@ -14,6 +14,7 @@ import {
   setupOpenAiCompatibleProviderTests,
   type ChatRequest,
 } from "./openAiCompatibleTestHelpers.js";
+import type { ProviderTraceEvent } from "../trace.js";
 
 const { originalEnv, originalFetch } = OPENAI_COMPATIBLE_PROVIDER_TEST_ENV;
 const DEFAULT_MODEL = "cf/moonshotai/kimi-k2.6";
@@ -319,6 +320,47 @@ describe("CloudflareProvider", () => {
       await expectStreamChatToThrow(
         provider,
         /Workers AI capacity temporarily unavailable/,
+      );
+    });
+
+    it("reports OpenAI-compatible response metadata and usage", async () => {
+      const traceEvents: ProviderTraceEvent[] = [];
+      globalThis.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        body: createSseStream([
+          'data: {"id":"cf-response-1","model":"@cf/moonshotai/kimi-k2.6","choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":9,"completion_tokens":3,"total_tokens":12}}\n\n',
+          "data: [DONE]\n\n",
+        ]),
+      });
+
+      for await (const _event of createProvider().streamChat({
+        ...DEFAULT_REQUEST,
+        trace: {
+          requestId: "request-1",
+          operationId: "operation-1",
+          purpose: "answer",
+        },
+        onTraceEvent: (event) => traceEvents.push(event),
+      })) {
+        // consume
+      }
+
+      expect(traceEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "provider_response_metadata",
+            endpointClass: "chat_completions",
+            upstreamRequestId: "cf-response-1",
+          }),
+          expect.objectContaining({
+            type: "provider_usage_reported",
+            availability: "reported",
+            usage: expect.objectContaining({
+              inputTokens: 9,
+              outputTokens: 3,
+            }),
+          }),
+        ]),
       );
     });
 

@@ -21,6 +21,7 @@ import {
   ChatTool,
   ChatToolCall,
 } from "../types.js";
+import type { ProviderTraceEvent } from "../trace.js";
 
 // Variables for dynamic imports
 let BedrockProvider: any;
@@ -594,6 +595,62 @@ describe("BedrockProvider", () => {
       // AWS SDK client instance has destroy method available
       // This test verifies that MockBedrockRuntimeClient was instantiated
       expect(MockBedrockRuntimeClient).toHaveBeenCalled();
+    });
+  });
+
+  it("reports request identity, usage, and raw termination metadata", async () => {
+    const traceEvents: ProviderTraceEvent[] = [];
+    mockSend.mockResolvedValue({
+      $metadata: { requestId: "aws-request-1" },
+      output: (async function* () {
+        yield { contentBlockDelta: { delta: { text: "ok" } } };
+        yield {
+          metadata: {
+            usage: {
+              inputTokens: 8,
+              outputTokens: 3,
+              totalTokens: 11,
+              cacheReadInputTokens: 2,
+            },
+          },
+        };
+        yield { messageStop: { stopReason: "end_turn" } };
+      })(),
+    });
+
+    const events = await consumeStream(
+      createTestProvider(),
+      createChatRequest("hello", "test-model", {
+        trace: {
+          requestId: "request-1",
+          operationId: "operation-1",
+          purpose: "answer",
+        },
+        onTraceEvent: (event) => traceEvents.push(event),
+      }),
+    );
+
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "provider_response_metadata",
+          endpointClass: "converse_stream",
+          upstreamRequestId: "aws-request-1",
+        }),
+        expect.objectContaining({
+          type: "provider_usage_reported",
+          availability: "reported",
+          usage: expect.objectContaining({
+            inputTokens: 8,
+            outputTokens: 3,
+            totalTokens: 11,
+          }),
+        }),
+      ]),
+    );
+    expect(events.at(-1)).toMatchObject({
+      type: "terminal",
+      rawProviderReason: "end_turn",
     });
   });
 });

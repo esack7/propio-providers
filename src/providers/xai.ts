@@ -6,10 +6,11 @@ import {
   ChatToolCall,
   ProviderError,
   ProviderAuthenticationError,
+  ProviderCapacityError,
   type StopReason,
 } from "../types.js";
 import type { ProviderDiagnosticListener } from "../diagnostics.js";
-import { withRetry } from "../internal/withRetry.js";
+import { withRetry, type WithRetryOptions } from "../internal/withRetry.js";
 import {
   buildOpenAIChatCompletionRequestBody,
   createResponsesFunctionTool,
@@ -24,7 +25,9 @@ import { consumeOpenAiChatCompletionsStream } from "../internal/openAiStream.js"
 import {
   OpenAiCompatibleProvider,
   type OpenAiCompatibleProviderOptions,
+  type OpenAiCompatibleRetryConfig,
 } from "../internal/openAiCompatibleProvider.js";
+import { emitOpenAiCompatibleTrace } from "../internal/providerMeasurements.js";
 
 const XAI_CHAT_COMPLETIONS_API_URLS = [
   "https://api.x.ai/v1/chat/completions",
@@ -45,11 +48,9 @@ export class XaiProvider extends OpenAiCompatibleProvider {
   readonly name = "xai";
   private readonly model: string;
   private readonly apiKey: string;
-  private readonly retryConfig?: {
-    maxRetries: number;
-    consecutive529Limit: number;
-  };
+  private readonly retryConfig?: OpenAiCompatibleRetryConfig;
   private readonly onDiagnosticEvent?: ProviderDiagnosticListener;
+  private readonly endpointFallbackErrors = new WeakSet<object>();
 
   constructor(options: OpenAiCompatibleProviderOptions) {
     super();
@@ -66,28 +67,9 @@ export class XaiProvider extends OpenAiCompatibleProvider {
     this.apiKey = apiKey;
   }
 
-  private shouldRetryEndpoint(status?: number): boolean {
-    return status !== undefined && status >= 500 && status < 600;
-  }
-
-  private isAbortError(translated: ProviderError): boolean {
-    return (
-      translated.message === "Request cancelled" ||
-      translated.originalError?.name === "AbortError"
-    );
-  }
-
-  private shouldContinueToNextEndpoint(
-    error: unknown,
-    translated: ProviderError,
-  ): boolean {
-    return !(error instanceof ProviderError) && !this.isAbortError(translated);
-  }
-
-  private async createEndpointResponseError(response: Response): Promise<{
-    translated: ProviderError;
-    retryable: boolean;
-  }> {
+  private async createEndpointResponseError(
+    response: Response,
+  ): Promise<ProviderError> {
     let errorBody = "";
     try {
       errorBody = await response.text();
@@ -95,59 +77,51 @@ export class XaiProvider extends OpenAiCompatibleProvider {
       // ignore read failures
     }
 
-    return {
-      translated: this.translateError(
-        new Error(errorBody || `HTTP ${response.status}`),
-        response,
-      ),
-      retryable: this.shouldRetryEndpoint(response.status),
-    };
-  }
-
-  private getContinuationError(error: unknown): ProviderError {
-    const translated =
-      error instanceof ProviderError ? error : this.translateError(error);
-    if (!this.shouldContinueToNextEndpoint(error, translated)) {
-      throw translated;
+    const originalError = new Error(errorBody || `HTTP ${response.status}`);
+    const error =
+      response.status === 529
+        ? new ProviderCapacityError(
+            errorBody
+              ? `xAI capacity exceeded: ${errorBody}`
+              : "xAI capacity exceeded",
+            originalError,
+          )
+        : this.translateError(originalError, response);
+    if (response.status >= 500 && response.status < 600) {
+      this.endpointFallbackErrors.add(error);
     }
-    return translated;
+    return error;
   }
 
   private async createPostResponse(
-    apiUrls: readonly string[],
+    apiUrl: string,
     body: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<Response> {
-    let lastError: ProviderError | null = null;
-
-    for (const apiUrl of apiUrls) {
-      try {
-        const response = await fetch(apiUrl, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${this.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(body),
-          signal,
-        });
-
-        if (response.ok) {
-          return response;
-        }
-
-        const { translated, retryable } =
-          await this.createEndpointResponseError(response);
-        if (!retryable) {
-          throw translated;
-        }
-        lastError = translated;
-      } catch (error) {
-        lastError = this.getContinuationError(error);
+    let response: Response;
+    try {
+      response = await fetch(apiUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+    } catch (error) {
+      const translated =
+        error instanceof ProviderError ? error : this.translateError(error);
+      if (
+        !(error instanceof ProviderError) &&
+        !this.isCancellation(translated)
+      ) {
+        this.endpointFallbackErrors.add(translated);
       }
+      throw translated;
     }
-
-    throw lastError ?? new ProviderError("xAI request failed");
+    if (!response.ok) throw await this.createEndpointResponseError(response);
+    return response;
   }
 
   async *streamChat(request: ChatRequest): AsyncIterable<ChatStreamEvent> {
@@ -158,7 +132,7 @@ export class XaiProvider extends OpenAiCompatibleProvider {
       }
 
       const body = this.createChatCompletionRequestBody(request);
-      const reader = await this.postStreamReader(
+      const { reader, endpointClass } = await this.postStreamReader(
         request,
         XAI_CHAT_COMPLETIONS_API_URLS,
         body,
@@ -167,7 +141,12 @@ export class XaiProvider extends OpenAiCompatibleProvider {
         number,
         OpenAIStreamToolCallAccumulator
       >();
-      yield* this.consumeChatCompletionsStream(reader, toolCallsByIndex);
+      yield* this.consumeChatCompletionsStream(
+        reader,
+        toolCallsByIndex,
+        request,
+        endpointClass,
+      );
     } catch (error) {
       if (error instanceof ProviderError) throw error;
       throw this.translateError(error);
@@ -178,28 +157,36 @@ export class XaiProvider extends OpenAiCompatibleProvider {
     request: ChatRequest,
   ): AsyncIterable<ChatStreamEvent> {
     const body = this.createResponsesRequestBody(request);
-    const reader = await this.postStreamReader(
+    const { reader, endpointClass } = await this.postStreamReader(
       request,
       XAI_RESPONSES_API_URLS,
       body,
     );
 
-    yield* this.consumeResponsesStream(reader);
+    yield* this.consumeResponsesStream(reader, request, endpointClass);
   }
 
   private async postStreamReader(
     request: ChatRequest,
     apiUrls: readonly string[],
     body: Record<string, unknown>,
-  ): Promise<ReadableStreamDefaultReader<Uint8Array>> {
+  ): Promise<{
+    reader: ReadableStreamDefaultReader<Uint8Array>;
+    endpointClass: string;
+  }> {
+    const retryState: XaiEndpointRetryState = {
+      endpointIndex: 0,
+      logicalRetryCount: 0,
+      nextRetry: "logical_retry",
+    };
+    let endpointClass = this.xaiEndpointClass(apiUrls[0]!);
     const response = await withRetry(
-      () => this.createPostResponse(apiUrls, body, request.signal),
-      this.buildRetryOptions(
-        request,
-        this.model,
-        this.retryConfig,
-        this.onDiagnosticEvent,
-      ),
+      () => {
+        const apiUrl = apiUrls[retryState.endpointIndex]!;
+        endpointClass = this.xaiEndpointClass(apiUrl);
+        return this.createPostResponse(apiUrl, body, request.signal);
+      },
+      this.buildEndpointRetryOptions(request, apiUrls, retryState),
     );
 
     const reader = this.getResponseReader(response);
@@ -207,7 +194,100 @@ export class XaiProvider extends OpenAiCompatibleProvider {
       throw this.translateError(new Error("No response body"));
     }
 
-    return reader;
+    return { reader, endpointClass };
+  }
+
+  private buildEndpointRetryOptions(
+    request: ChatRequest,
+    apiUrls: readonly string[],
+    state: XaiEndpointRetryState,
+  ): WithRetryOptions {
+    const configuredRetries = this.retryConfig?.maxRetries ?? 3;
+    const base = this.buildRetryOptions(
+      request,
+      this.model,
+      this.endpointRetryConfig(apiUrls.length),
+      this.onDiagnosticEvent,
+      () => this.xaiEndpointClass(apiUrls[state.endpointIndex]!),
+    );
+    const baseOnRetry = base.onRetry;
+
+    return {
+      ...base,
+      isRetryable: (error) => {
+        if (this.isCancellation(error) || !base.isRetryable(error)) {
+          return false;
+        }
+        if (
+          this.isEndpointFallbackError(error) &&
+          state.endpointIndex < apiUrls.length - 1
+        ) {
+          state.nextRetry = "endpoint_fallback";
+          return true;
+        }
+        state.nextRetry = "logical_retry";
+        return state.logicalRetryCount < configuredRetries;
+      },
+      getBackoffAttempt: () =>
+        state.nextRetry === "endpoint_fallback"
+          ? null
+          : state.logicalRetryCount,
+      onRetry: (context) => {
+        baseOnRetry?.(context);
+        if (state.nextRetry === "endpoint_fallback") {
+          state.endpointIndex += 1;
+        } else {
+          state.endpointIndex = 0;
+          state.logicalRetryCount += 1;
+        }
+      },
+    };
+  }
+
+  private isEndpointFallbackError(error: unknown): boolean {
+    return typeof error === "object" && error !== null
+      ? this.endpointFallbackErrors.has(error)
+      : false;
+  }
+
+  private isCancellation(error: unknown): boolean {
+    return (
+      error instanceof Error &&
+      (error.name === "AbortError" ||
+        error.message === "Request cancelled" ||
+        (error instanceof ProviderError &&
+          error.originalError?.name === "AbortError"))
+    );
+  }
+
+  private endpointRetryConfig(endpointCount: number): {
+    maxRetries: number;
+    consecutive529Limit: number;
+    baseDelayMs?: number;
+  } {
+    const configuredRetries = this.retryConfig?.maxRetries ?? 3;
+    return {
+      // withRetry now observes each physical endpoint call. Convert both
+      // configured limits from complete regional sweeps to physical attempts.
+      maxRetries: (configuredRetries + 1) * endpointCount - 1,
+      consecutive529Limit:
+        (this.retryConfig?.consecutive529Limit ?? 3) * endpointCount,
+      ...(this.retryConfig?.baseDelayMs !== undefined
+        ? { baseDelayMs: this.retryConfig.baseDelayMs }
+        : {}),
+    };
+  }
+
+  private xaiEndpointClass(apiUrl: string): string {
+    const api = apiUrl.includes("/responses")
+      ? "responses"
+      : "chat_completions";
+    const region = apiUrl.includes("us-east-1")
+      ? "us_east_1"
+      : apiUrl.includes("eu-west-1")
+        ? "eu_west_1"
+        : "global";
+    return `${api}:${region}`;
   }
 
   private createResponsesRequestBody(
@@ -309,22 +389,33 @@ export class XaiProvider extends OpenAiCompatibleProvider {
 
   private async *consumeResponsesStream(
     reader: ReadableStreamDefaultReader<Uint8Array>,
+    request: ChatRequest,
+    endpointClass: string,
   ): AsyncIterable<ChatStreamEvent> {
     const state: XaiResponsesStreamState = {
       functionCallsByOutputIndex: new Map(),
       hasFunctionCall: false,
     };
     let stopReason: StopReason = "end_turn";
+    let rawProviderReason: string | undefined;
+    const measurementState = { responseMetadataObserved: false };
 
     for await (const data of readSseDataLines(reader)) {
-      const result = this.parseResponsesStreamLine(data, state);
+      const result = this.parseResponsesStreamLine(
+        data,
+        state,
+        request,
+        endpointClass,
+        measurementState,
+      );
       if (result.stopReason) {
         stopReason = result.stopReason;
+        rawProviderReason = result.rawProviderReason;
       }
       yield* result.events;
     }
 
-    yield { type: "terminal", stopReason };
+    yield { type: "terminal", stopReason, rawProviderReason };
   }
 
   private createChatCompletionRequestBody(
@@ -347,8 +438,14 @@ export class XaiProvider extends OpenAiCompatibleProvider {
   private async *consumeChatCompletionsStream(
     reader: ReadableStreamDefaultReader<Uint8Array>,
     toolCallsByIndex: Map<number, OpenAIStreamToolCallAccumulator>,
+    request: ChatRequest,
+    endpointClass: string,
   ): AsyncIterable<ChatStreamEvent> {
-    yield* consumeOpenAiChatCompletionsStream(reader, toolCallsByIndex);
+    yield* consumeOpenAiChatCompletionsStream(reader, toolCallsByIndex, {
+      provider: this.name,
+      request,
+      endpointClass,
+    });
   }
 
   private mapXaiResponsesStopReason(
@@ -395,6 +492,9 @@ export class XaiProvider extends OpenAiCompatibleProvider {
   private parseResponsesStreamLine(
     data: string,
     state: XaiResponsesStreamState,
+    request: ChatRequest,
+    endpointClass: string,
+    measurementState: { responseMetadataObserved: boolean },
   ): ResponsesStreamLineResult {
     if (data === "[DONE]") {
       return { events: [] };
@@ -405,7 +505,29 @@ export class XaiProvider extends OpenAiCompatibleProvider {
       return { events: [] };
     }
 
+    this.captureResponsesTrace(event, request, endpointClass, measurementState);
+
     return this.handleResponsesStreamEvent(event, state);
+  }
+
+  private captureResponsesTrace(
+    event: XaiResponsesStreamEvent,
+    request: ChatRequest,
+    endpointClass: string,
+    state: { responseMetadataObserved: boolean },
+  ): void {
+    const response = event.response;
+    if (!response) return;
+    emitOpenAiCompatibleTrace({
+      provider: this.name,
+      request,
+      endpointClass,
+      responseId: response.id,
+      actualModel: response.model,
+      usage: response.usage,
+      includeResponseMetadata: !state.responseMetadataObserved,
+    });
+    if (response.id || response.model) state.responseMetadataObserved = true;
   }
 
   // fallow-ignore-next-line complexity
@@ -528,6 +650,7 @@ export class XaiProvider extends OpenAiCompatibleProvider {
     return {
       events: [],
       stopReason: this.mapXaiResponsesStopReason(status, state.hasFunctionCall),
+      rawProviderReason: status,
     };
   }
 
@@ -555,9 +678,16 @@ interface ResponsesFunctionCall {
   argsString?: string;
 }
 
+interface XaiEndpointRetryState {
+  endpointIndex: number;
+  logicalRetryCount: number;
+  nextRetry: "endpoint_fallback" | "logical_retry";
+}
+
 interface ResponsesStreamLineResult {
   events: ChatStreamEvent[];
   stopReason?: "end_turn" | "tool_use" | "max_tokens" | "error";
+  rawProviderReason?: string;
 }
 
 interface XaiResponsesStreamState {
@@ -577,6 +707,15 @@ interface XaiResponsesStreamEvent {
     arguments?: string;
   };
   response?: {
+    id?: string;
+    model?: string;
     status?: string;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      total_tokens?: number;
+      input_tokens_details?: { cached_tokens?: number };
+      output_tokens_details?: { reasoning_tokens?: number };
+    };
   };
 }

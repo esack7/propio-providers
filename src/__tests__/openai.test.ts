@@ -13,6 +13,7 @@ import {
   ProviderRateLimitError,
 } from "../types.js";
 import { OpenRouterTestFixture } from "./openrouterTestHelpers.js";
+import type { ProviderTraceEvent } from "../trace.js";
 
 const DEFAULT_REQUEST: ChatRequest = {
   model: "gpt-5.5",
@@ -120,7 +121,11 @@ describe("OpenAiProvider", () => {
       expect(events).toEqual([
         { type: "assistant_text", delta: "Hello" },
         { type: "assistant_text", delta: " OpenAI" },
-        { type: "terminal", stopReason: "end_turn" },
+        {
+          type: "terminal",
+          stopReason: "end_turn",
+          rawProviderReason: "completed",
+        },
       ]);
       expect(fetch).toHaveBeenCalledWith(
         "https://api.openai.com/v1/responses",
@@ -147,7 +152,11 @@ describe("OpenAiProvider", () => {
 
       await expect(collectEvents(createProvider())).resolves.toEqual([
         { type: "assistant_text", delta: "OpenAI text" },
-        { type: "terminal", stopReason: "end_turn" },
+        {
+          type: "terminal",
+          stopReason: "end_turn",
+          rawProviderReason: "completed",
+        },
       ]);
     });
 
@@ -312,7 +321,11 @@ describe("OpenAiProvider", () => {
           },
         ]),
       });
-      expect(events[2]).toEqual({ type: "terminal", stopReason: "tool_use" });
+      expect(events[2]).toEqual({
+        type: "terminal",
+        stopReason: "tool_use",
+        rawProviderReason: "completed",
+      });
     });
 
     it("replays function calls without reasoning items", async () => {
@@ -623,7 +636,12 @@ describe("OpenAiProvider", () => {
           ]),
         );
       const events = await collectEvents(createProvider());
-      expect(events.at(-1)).toEqual({ type: "terminal", stopReason });
+      expect(events.at(-1)).toEqual({
+        type: "terminal",
+        stopReason,
+        rawProviderReason:
+          eventType === "response.incomplete" ? "incomplete" : eventType,
+      });
     });
   });
 
@@ -738,5 +756,48 @@ describe("OpenAiProvider", () => {
       );
       expect(fetch).toHaveBeenCalledTimes(1);
     });
+  });
+  it("reports Responses API identity, model, and usage", async () => {
+    const traceEvents: ProviderTraceEvent[] = [];
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        successfulResponse([
+          'data: {"type":"response.output_text.delta","delta":"ok"}\n\n',
+          'data: {"type":"response.completed","response":{"id":"resp_123","model":"gpt-5.5-2026-08-01","status":"completed","usage":{"input_tokens":12,"output_tokens":4,"total_tokens":16,"input_tokens_details":{"cached_tokens":3},"output_tokens_details":{"reasoning_tokens":2}}}}\n\n',
+        ]),
+      );
+
+    await collectEvents(createProvider(), {
+      ...DEFAULT_REQUEST,
+      trace: {
+        requestId: "request-1",
+        operationId: "operation-1",
+        purpose: "answer",
+      },
+      onTraceEvent: (event) => traceEvents.push(event),
+    });
+
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "provider_response_metadata",
+          endpointClass: "responses",
+          upstreamRequestId: "resp_123",
+          actualModel: "gpt-5.5-2026-08-01",
+        }),
+        expect.objectContaining({
+          type: "provider_usage_reported",
+          availability: "reported",
+          usage: {
+            inputTokens: 12,
+            outputTokens: 4,
+            totalTokens: 16,
+            cacheReadInputTokens: 3,
+            reasoningTokens: 2,
+          },
+        }),
+      ]),
+    );
   });
 });

@@ -8,6 +8,8 @@ jest.unstable_mockModule("ollama", () => ({
   Ollama: mockOllamaConstructor,
 }));
 
+import type { ProviderTraceEvent } from "../trace.js";
+
 // Dynamic imports after mocks are set up
 let OllamaProvider: any;
 
@@ -386,5 +388,49 @@ describe("OllamaProvider", () => {
       expect(callArgs.messages[2].role).toBe("tool");
       expect(callArgs.messages[2].content).toBe("result2");
     });
+  });
+
+  it("reports the actual model and local token usage", async () => {
+    const traceEvents: ProviderTraceEvent[] = [];
+    mockChat.mockReturnValue(
+      (async function* () {
+        yield { message: { content: "ok" } };
+        yield {
+          model: "llama3.3:latest",
+          message: {},
+          done_reason: "stop",
+          prompt_eval_count: 7,
+          eval_count: 2,
+        };
+      })(),
+    );
+
+    for await (const _event of createTestProvider().streamChat({
+      model: "llama3.3",
+      messages: [{ role: "user", content: "hello" }],
+      trace: {
+        requestId: "request-1",
+        operationId: "operation-1",
+        purpose: "answer",
+      },
+      onTraceEvent: (event: ProviderTraceEvent) => traceEvents.push(event),
+    })) {
+      // consume
+    }
+
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "provider_response_metadata",
+          endpointClass: "ollama_chat",
+          actualModel: "llama3.3:latest",
+        }),
+        expect.objectContaining({
+          type: "provider_usage_reported",
+          availability: "reported",
+          usage: { inputTokens: 7, outputTokens: 2 },
+        }),
+      ]),
+    );
   });
 });
