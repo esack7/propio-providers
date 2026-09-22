@@ -1,6 +1,6 @@
 import { XaiProvider } from "../providers/xai.js";
 import type { ProviderTraceEvent } from "../trace.js";
-import { ProviderRateLimitError } from "../types.js";
+import { ProviderCapacityError, ProviderRateLimitError } from "../types.js";
 import {
   OPENAI_COMPATIBLE_PROVIDER_TEST_ENV,
   OpenRouterTestFixture,
@@ -346,6 +346,34 @@ describe("XaiProvider", () => {
       );
 
       expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("counts consecutive 529 limits in complete regional sweeps", async () => {
+      globalThis.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 529,
+        text: () => Promise.resolve("overloaded"),
+      });
+
+      await expectStreamChatToThrow(
+        createProvider({
+          retryConfig: {
+            maxRetries: 5,
+            consecutive529Limit: 2,
+            baseDelayMs: 0,
+          },
+        }),
+        ProviderCapacityError,
+      );
+
+      expect((fetch as jest.Mock).mock.calls.map(([url]) => url)).toEqual([
+        "https://api.x.ai/v1/chat/completions",
+        "https://us-east-1.api.x.ai/v1/chat/completions",
+        "https://eu-west-1.api.x.ai/v1/chat/completions",
+        "https://api.x.ai/v1/chat/completions",
+        "https://us-east-1.api.x.ai/v1/chat/completions",
+        "https://eu-west-1.api.x.ai/v1/chat/completions",
+      ]);
     });
   });
 

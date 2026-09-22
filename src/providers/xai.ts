@@ -6,6 +6,7 @@ import {
   ChatToolCall,
   ProviderError,
   ProviderAuthenticationError,
+  ProviderCapacityError,
   type StopReason,
 } from "../types.js";
 import type { ProviderDiagnosticListener } from "../diagnostics.js";
@@ -76,10 +77,16 @@ export class XaiProvider extends OpenAiCompatibleProvider {
       // ignore read failures
     }
 
-    const error = this.translateError(
-      new Error(errorBody || `HTTP ${response.status}`),
-      response,
-    );
+    const originalError = new Error(errorBody || `HTTP ${response.status}`);
+    const error =
+      response.status === 529
+        ? new ProviderCapacityError(
+            errorBody
+              ? `xAI capacity exceeded: ${errorBody}`
+              : "xAI capacity exceeded",
+            originalError,
+          )
+        : this.translateError(originalError, response);
     if (response.status >= 500 && response.status < 600) {
       this.endpointFallbackErrors.add(error);
     }
@@ -260,8 +267,8 @@ export class XaiProvider extends OpenAiCompatibleProvider {
   } {
     const configuredRetries = this.retryConfig?.maxRetries ?? 3;
     return {
-      // A retry attempt now represents one physical endpoint call. Preserve
-      // the previous number of complete global/regional sweeps.
+      // withRetry now observes each physical endpoint call. Convert both
+      // configured limits from complete regional sweeps to physical attempts.
       maxRetries: (configuredRetries + 1) * endpointCount - 1,
       consecutive529Limit:
         (this.retryConfig?.consecutive529Limit ?? 3) * endpointCount,
