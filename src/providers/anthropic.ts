@@ -15,6 +15,8 @@ import {
   ProviderCapacityError,
 } from "../types.js";
 import { withRetry } from "../internal/withRetry.js";
+import { emitProviderResponseMetadata } from "../trace.js";
+import { emitNormalizedProviderUsage } from "../internal/providerMeasurements.js";
 
 // Default budget and min output headroom when extended thinking is enabled.
 const THINKING_BUDGET_TOKENS = 10000;
@@ -143,7 +145,9 @@ export class AnthropicProvider extends BaseProvider {
       };
 
       for await (const event of stream) {
-        if (event.type === "content_block_start") {
+        if (event.type === "message_start") {
+          this.captureMessageStartTrace(event, request);
+        } else if (event.type === "content_block_start") {
           this.handleContentBlockStart(
             event as Anthropic.RawContentBlockStartEvent,
             state,
@@ -168,6 +172,7 @@ export class AnthropicProvider extends BaseProvider {
             state.rawStopReason = deltaEvent.delta.stop_reason;
             state.stopReason = this.mapStopReason(deltaEvent.delta.stop_reason);
           }
+          this.captureMessageDeltaUsage(deltaEvent, request);
         }
       }
 
@@ -192,6 +197,45 @@ export class AnthropicProvider extends BaseProvider {
     } catch (error) {
       throw this.translateError(error);
     }
+  }
+
+  private captureMessageStartTrace(
+    event: Anthropic.RawMessageStartEvent,
+    request: ChatRequest,
+  ): void {
+    emitProviderResponseMetadata({
+      provider: this.name,
+      request,
+      endpointClass: "messages",
+      upstreamRequestId: event.message.id,
+      actualModel: event.message.model,
+    });
+    this.emitAnthropicUsage(event.message.usage, request);
+  }
+
+  private captureMessageDeltaUsage(
+    event: Anthropic.RawMessageDeltaEvent,
+    request: ChatRequest,
+  ): void {
+    this.emitAnthropicUsage(event.usage, request);
+  }
+
+  private emitAnthropicUsage(
+    usage: Anthropic.Usage | Anthropic.MessageDeltaUsage,
+    request: ChatRequest,
+  ): void {
+    emitNormalizedProviderUsage({
+      provider: this.name,
+      request,
+      endpointClass: "messages",
+      usage: {
+        inputTokens: usage.input_tokens,
+        outputTokens: usage.output_tokens,
+        cacheReadInputTokens: usage.cache_read_input_tokens,
+        cacheWriteInputTokens: usage.cache_creation_input_tokens,
+        reasoningTokens: usage.output_tokens_details?.thinking_tokens,
+      },
+    });
   }
 
   private handleContentBlockStart(
@@ -571,8 +615,11 @@ export class AnthropicProvider extends BaseProvider {
   ]);
 
   private createRetryOptions(request: ChatRequest) {
-    return this.buildBaseRetryOptions(request, (error) =>
-      this.isRetryableError(error),
+    return this.buildBaseRetryOptions(
+      request,
+      (error) => this.isRetryableError(error),
+      500,
+      "messages",
     );
   }
 

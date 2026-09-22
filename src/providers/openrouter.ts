@@ -29,6 +29,7 @@ import type {
 import type { OpenRouterRoutingConfig } from "../config.js";
 import { OpenAiCompatibleProvider } from "../internal/openAiCompatibleProvider.js";
 import { emitProviderRequestMutation } from "../trace.js";
+import { emitOpenAiCompatibleSseTrace } from "../internal/providerMeasurements.js";
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const DSML_TOOL_CALL_START_TOKENS = [
@@ -74,6 +75,7 @@ interface StreamChunkState {
   reasoningContent: string;
   sawUsableOutput: boolean;
   stopReason: string;
+  rawStopReason?: string;
   toolCallsByIndex: Map<
     number,
     { id?: string; name: string; argsString: string }
@@ -187,6 +189,7 @@ export class OpenRouterProvider extends OpenAiCompatibleProvider {
         this.applyRequestBodyExtras(body);
       },
     });
+    body.stream_options = { include_usage: true };
     if (request.requestReasoning) {
       body.reasoning = { enabled: true, exclude: false };
     }
@@ -540,8 +543,10 @@ export class OpenRouterProvider extends OpenAiCompatibleProvider {
       }>;
     }>(data)?.choices?.[0];
     if (!choice?.delta) return { events: [], done: false };
-    if (choice.finish_reason)
+    if (choice.finish_reason) {
+      state.rawStopReason = choice.finish_reason;
       state.stopReason = this.mapOpenRouterFinishReason(choice.finish_reason);
+    }
     const events: ChatStreamEvent[] = [];
     if (choice.delta.reasoning_content) {
       state.reasoningContent += choice.delta.reasoning_content;
@@ -607,8 +612,17 @@ export class OpenRouterProvider extends OpenAiCompatibleProvider {
       stopReason: "end_turn",
       toolCallsByIndex: new Map(),
     };
+    const measurementState = { responseMetadataObserved: false };
 
     for await (const data of readSseDataLines(reader)) {
+      emitOpenAiCompatibleSseTrace({
+        data,
+        provider: this.name,
+        request: options.request,
+        endpointClass: "chat_completions",
+        costCurrency: "USD",
+        state: measurementState,
+      });
       const { events, done } = this.processStreamChunk(
         data,
         state,
@@ -633,7 +647,11 @@ export class OpenRouterProvider extends OpenAiCompatibleProvider {
       throw new ProviderError("OpenRouter returned no usable assistant output");
     }
 
-    yield { type: "terminal", stopReason: state.stopReason as any };
+    yield {
+      type: "terminal",
+      stopReason: state.stopReason as any,
+      rawProviderReason: state.rawStopReason,
+    };
   }
 
   private async fetchAndValidate(
@@ -669,6 +687,7 @@ export class OpenRouterProvider extends OpenAiCompatibleProvider {
         },
         isRetryable: (err) => this.isRetryableError(err),
         onDiagnosticEvent: (event) => this.emitDiagnostic(event),
+        endpointClass: "chat_completions",
       }),
       onFinalRetry: ({ attempt }) => {
         if (attempt === 0 || !request.tools?.length) return;

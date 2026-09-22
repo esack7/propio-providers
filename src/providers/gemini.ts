@@ -25,6 +25,10 @@ import {
   type OpenAiCompatibleProviderOptions,
 } from "../internal/openAiCompatibleProvider.js";
 import type { ProviderCapabilities } from "../interface.js";
+import {
+  emitNormalizedProviderUsage,
+  emitOpenAiCompatibleSseTrace,
+} from "../internal/providerMeasurements.js";
 
 const GEMINI_API_URL =
   "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
@@ -427,7 +431,12 @@ export class GeminiProvider extends OpenAiCompatibleProvider {
   private parseGeminiStreamChunk(
     data: string,
     toolCallsByIndex: Map<number, GeminiAccumulatedToolCall>,
-  ): { events: ChatStreamEvent[]; stopReason?: string; done: boolean } {
+  ): {
+    events: ChatStreamEvent[];
+    stopReason?: string;
+    rawProviderReason?: string;
+    done: boolean;
+  } {
     if (data === "[DONE]") {
       return { events: [], done: true };
     }
@@ -460,8 +469,36 @@ export class GeminiProvider extends OpenAiCompatibleProvider {
       stopReason: choice.finish_reason
         ? this.mapFinishReason(choice.finish_reason)
         : undefined,
+      rawProviderReason: choice.finish_reason,
       done: false,
     };
+  }
+
+  private captureGeminiTraceFields(
+    data: string,
+    request: ChatRequest,
+    state: { responseMetadataObserved: boolean },
+  ): void {
+    const chunk = emitOpenAiCompatibleSseTrace({
+      data,
+      provider: this.name,
+      request,
+      endpointClass: "chat_completions",
+      state,
+    });
+    if (!chunk?.usage_metadata) return;
+    emitNormalizedProviderUsage({
+      provider: this.name,
+      request,
+      endpointClass: "chat_completions",
+      usage: {
+        inputTokens: chunk.usage_metadata.prompt_token_count,
+        outputTokens: chunk.usage_metadata.candidates_token_count,
+        totalTokens: chunk.usage_metadata.total_token_count,
+        cacheReadInputTokens: chunk.usage_metadata.cached_content_token_count,
+        reasoningTokens: chunk.usage_metadata.thoughts_token_count,
+      },
+    });
   }
 
   private async createGeminiStreamReader(
@@ -478,6 +515,7 @@ export class GeminiProvider extends OpenAiCompatibleProvider {
         this.model,
         this.retryConfig,
         this.onDiagnosticEvent,
+        "chat_completions",
       ),
       translateError: (error) => this.translateError(error),
     });
@@ -540,11 +578,15 @@ export class GeminiProvider extends OpenAiCompatibleProvider {
       const reader = await this.createGeminiStreamReader(request);
       const toolCallsByIndex = new Map<number, GeminiAccumulatedToolCall>();
       let stopReason: any = "end_turn";
+      let rawProviderReason: string | undefined;
+      const measurementState = { responseMetadataObserved: false };
 
       for await (const data of readSseDataLines(reader)) {
+        this.captureGeminiTraceFields(data, request, measurementState);
         const result = this.parseGeminiStreamChunk(data, toolCallsByIndex);
         if (result.stopReason) {
           stopReason = result.stopReason;
+          rawProviderReason = result.rawProviderReason;
         }
         yield* result.events;
         if (result.done) {
@@ -571,7 +613,7 @@ export class GeminiProvider extends OpenAiCompatibleProvider {
         yield toolCallsEvent;
       }
 
-      yield { type: "terminal", stopReason };
+      yield { type: "terminal", stopReason, rawProviderReason };
     } catch (error) {
       if (error instanceof ProviderError) throw error;
       throw this.translateError(error);

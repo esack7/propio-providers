@@ -1,4 +1,5 @@
 import { XaiProvider } from "../providers/xai.js";
+import type { ProviderTraceEvent } from "../trace.js";
 import {
   OPENAI_COMPATIBLE_PROVIDER_TEST_ENV,
   OpenRouterTestFixture,
@@ -212,6 +213,7 @@ describe("XaiProvider", () => {
     });
 
     it("should fall back to a regional endpoint when the global endpoint returns 503", async () => {
+      const traceEvents: ProviderTraceEvent[] = [];
       const successChunks = [
         'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
         "data: [DONE]\n\n",
@@ -247,6 +249,12 @@ describe("XaiProvider", () => {
       for await (const chunk of provider.streamChat({
         model: "grok-4-1-fast-reasoning",
         messages: [{ role: "user", content: "Hi" }],
+        trace: {
+          requestId: "request-1",
+          operationId: "operation-1",
+          purpose: "answer",
+        },
+        onTraceEvent: (event) => traceEvents.push(event),
       })) {
         deltas.push(chunk.delta);
       }
@@ -262,6 +270,57 @@ describe("XaiProvider", () => {
         "https://us-east-1.api.x.ai/v1/chat/completions",
         expect.any(Object),
       );
+      const attempts = traceEvents.filter(
+        (event) => event.type === "provider_attempt_started",
+      );
+      expect(attempts).toHaveLength(2);
+      expect(attempts.map((event) => event.endpointClass)).toEqual([
+        "chat_completions:global",
+        "chat_completions:us_east_1",
+      ]);
+      expect(new Set(attempts.map((event) => event.attemptId)).size).toBe(2);
     });
+  });
+
+  it("reports xAI response identity and token usage", async () => {
+    const traceEvents: ProviderTraceEvent[] = [];
+    globalThis.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      body: createSseStream([
+        'data: {"id":"xai-response-1","model":"grok-4-1-fast-reasoning","choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18,"completion_tokens_details":{"reasoning_tokens":4}}}\n\n',
+        "data: [DONE]\n\n",
+      ]),
+    });
+
+    for await (const _event of createProvider().streamChat({
+      ...DEFAULT_REQUEST,
+      trace: {
+        requestId: "request-1",
+        operationId: "operation-1",
+        purpose: "answer",
+      },
+      onTraceEvent: (event) => traceEvents.push(event),
+    })) {
+      // consume
+    }
+
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "provider_response_metadata",
+          endpointClass: "chat_completions:global",
+          upstreamRequestId: "xai-response-1",
+        }),
+        expect.objectContaining({
+          type: "provider_usage_reported",
+          availability: "reported",
+          usage: expect.objectContaining({
+            inputTokens: 11,
+            outputTokens: 7,
+            reasoningTokens: 4,
+          }),
+        }),
+      ]),
+    );
   });
 });

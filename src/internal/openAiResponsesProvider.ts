@@ -25,6 +25,7 @@ import {
   serializeToolArguments,
 } from "./shared.js";
 import { withRetry } from "./withRetry.js";
+import { emitOpenAiCompatibleTrace } from "./providerMeasurements.js";
 
 interface ResponsesFunctionCall {
   id?: string;
@@ -54,7 +55,18 @@ interface ResponsesStreamEvent {
   delta?: string;
   output_index?: number;
   item?: Record<string, unknown> & ResponsesFunctionCall;
-  response?: { status?: string };
+  response?: {
+    id?: string;
+    model?: string;
+    status?: string;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      total_tokens?: number;
+      input_tokens_details?: { cached_tokens?: number };
+      output_tokens_details?: { reasoning_tokens?: number };
+    };
+  };
 }
 
 interface FunctionCallAccumulator {
@@ -69,7 +81,17 @@ interface ResponsesStreamState {
   readonly outputItemPhasesByOutputIndex: Map<number, string>;
   readonly replayItemsByOutputIndex: Map<number, ResponsesReplayItem>;
   stopReason: StopReason;
+  rawStopReason?: string;
 }
+
+const RESPONSES_SUCCESS_EVENTS = new Set([
+  "response.completed",
+  "response.done",
+]);
+const RESPONSES_FAILURE_EVENTS = new Set([
+  "response.failed",
+  "response.cancelled",
+]);
 
 export interface OpenAiResponsesProviderProfile {
   readonly name: string;
@@ -131,6 +153,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
           this.model,
           this.retryConfig,
           this.onDiagnosticEvent,
+          "responses",
         ),
       );
       const reader = response.body?.getReader();
@@ -138,7 +161,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
         throw new ProviderError(this.profile.missingBodyMessage);
       }
 
-      yield* this.consumeResponsesStream(reader);
+      yield* this.consumeResponsesStream(reader, request);
     } catch (error) {
       if (error instanceof ProviderError) {
         throw error;
@@ -366,6 +389,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
 
   private async *consumeResponsesStream(
     reader: ReadableStreamDefaultReader<Uint8Array>,
+    request: ChatRequest,
   ): AsyncIterable<ChatStreamEvent> {
     const state: ResponsesStreamState = {
       functionCallsByOutputIndex: new Map(),
@@ -373,6 +397,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
       replayItemsByOutputIndex: new Map(),
       stopReason: "end_turn",
     };
+    const measurementState = { responseMetadataObserved: false };
 
     for await (const data of readSseDataLines(reader)) {
       if (data === "[DONE]") {
@@ -382,6 +407,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
       if (!event?.type) {
         continue;
       }
+      this.captureTraceFields(event, request, measurementState);
       const outputEvent = this.applyStreamEvent(event, state);
       if (outputEvent) {
         yield outputEvent;
@@ -392,7 +418,30 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
     if (toolCallsEvent) {
       yield toolCallsEvent;
     }
-    yield { type: "terminal", stopReason: state.stopReason };
+    yield {
+      type: "terminal",
+      stopReason: state.stopReason,
+      rawProviderReason: state.rawStopReason,
+    };
+  }
+
+  private captureTraceFields(
+    event: ResponsesStreamEvent,
+    request: ChatRequest,
+    state: { responseMetadataObserved: boolean },
+  ): void {
+    const response = event.response;
+    if (!response) return;
+    emitOpenAiCompatibleTrace({
+      provider: this.name,
+      request,
+      endpointClass: "responses",
+      responseId: response.id,
+      actualModel: response.model,
+      usage: response.usage,
+      includeResponseMetadata: !state.responseMetadataObserved,
+    });
+    if (response.id || response.model) state.responseMetadataObserved = true;
   }
 
   private applyStreamEvent(
@@ -495,22 +544,41 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
     event: ResponsesStreamEvent,
     state: ResponsesStreamState,
   ): void {
-    switch (event.type) {
-      case "response.completed":
-      case "response.done":
-        state.stopReason = this.mapStopReason(
-          event.response?.status,
-          state.functionCallsByOutputIndex.size > 0,
-        );
-        break;
-      case "response.incomplete":
-        state.stopReason = "max_tokens";
-        break;
-      case "response.failed":
-      case "response.cancelled":
-        state.stopReason = "error";
-        break;
-    }
+    if (this.captureIncompleteState(event, state)) return;
+    if (this.captureFailureState(event, state)) return;
+    this.captureSuccessState(event, state);
+  }
+
+  private captureIncompleteState(
+    event: ResponsesStreamEvent,
+    state: ResponsesStreamState,
+  ): boolean {
+    if (event.type !== "response.incomplete") return false;
+    state.rawStopReason = "incomplete";
+    state.stopReason = "max_tokens";
+    return true;
+  }
+
+  private captureFailureState(
+    event: ResponsesStreamEvent,
+    state: ResponsesStreamState,
+  ): boolean {
+    if (!RESPONSES_FAILURE_EVENTS.has(event.type ?? "")) return false;
+    state.rawStopReason = event.response?.status ?? event.type;
+    state.stopReason = "error";
+    return true;
+  }
+
+  private captureSuccessState(
+    event: ResponsesStreamEvent,
+    state: ResponsesStreamState,
+  ): void {
+    if (!RESPONSES_SUCCESS_EVENTS.has(event.type ?? "")) return;
+    state.rawStopReason = event.response?.status;
+    state.stopReason = this.mapStopReason(
+      event.response?.status,
+      state.functionCallsByOutputIndex.size > 0,
+    );
   }
 
   private captureFunctionCall(

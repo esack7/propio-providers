@@ -1,4 +1,5 @@
 import { GeminiProvider } from "../providers/gemini.js";
+import type { ProviderTraceEvent } from "../trace.js";
 import {
   ProviderAuthenticationError,
   ProviderContextLengthError,
@@ -682,5 +683,49 @@ describe("GeminiProvider", () => {
         ),
       ).toBe(true);
     });
+  });
+  it("reports Gemini response metadata and native usage fields", async () => {
+    const traceEvents: ProviderTraceEvent[] = [];
+    globalThis.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      body: createSseStream([
+        'data: {"id":"gemini-response-1","model":"gemini-3.1-pro","choices":[{"delta":{"content":"ok"},"finish_reason":"STOP"}],"usage_metadata":{"prompt_token_count":14,"candidates_token_count":5,"total_token_count":19,"cached_content_token_count":4,"thoughts_token_count":2}}\n\n',
+        "data: [DONE]\n\n",
+      ]),
+    });
+
+    for await (const _event of createGeminiProvider().streamChat({
+      model: "gemini-3.1-pro-preview",
+      messages: [{ role: "user", content: "hello" }],
+      trace: {
+        requestId: "request-1",
+        operationId: "operation-1",
+        purpose: "answer",
+      },
+      onTraceEvent: (event) => traceEvents.push(event),
+    })) {
+      // consume
+    }
+
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "provider_response_metadata",
+          upstreamRequestId: "gemini-response-1",
+          actualModel: "gemini-3.1-pro",
+        }),
+        expect.objectContaining({
+          type: "provider_usage_reported",
+          availability: "reported",
+          usage: {
+            inputTokens: 14,
+            outputTokens: 5,
+            totalTokens: 19,
+            cacheReadInputTokens: 4,
+            reasoningTokens: 2,
+          },
+        }),
+      ]),
+    );
   });
 });

@@ -70,6 +70,60 @@ describe("withProviderTracing", () => {
     expect(secondAttempt.attemptId).not.toBe(firstAttemptEvents[0].attemptId);
   });
 
+  it("attributes first useful output and unavailable usage to the connected attempt", async () => {
+    const events: ProviderTraceEvent[] = [];
+    const provider: LLMProvider = {
+      name: "fixture",
+      getCapabilities: () => ({ contextWindowTokens: 1000 }),
+      async *streamChat(streamRequest): AsyncIterable<ChatStreamEvent> {
+        await withRetry(
+          async () => "connected",
+          createProviderRetryOptions({
+            request: streamRequest,
+            model: streamRequest.model,
+            provider: "fixture",
+            retryConfig: {
+              maxRetries: 0,
+              consecutive529Limit: 1,
+              baseDelayMs: 0,
+            },
+            endpointClass: "fixture_stream",
+            isRetryable: () => false,
+          }),
+        );
+        yield { type: "assistant_text", delta: "ok" };
+        yield { type: "terminal", stopReason: "end_turn" };
+      },
+    };
+
+    for await (const _event of withProviderTracing(provider).streamChat(
+      request((event) => events.push(event)),
+    )) {
+      // consume
+    }
+
+    const started = events.find(
+      (event) => event.type === "provider_attempt_started",
+    );
+    const firstOutput = events.find(
+      (event) => event.type === "provider_attempt_first_output",
+    );
+    const usage = events.find(
+      (event) => event.type === "provider_usage_reported",
+    );
+    expect(started).toMatchObject({ endpointClass: "fixture_stream" });
+    expect(firstOutput).toMatchObject({
+      attemptId: started?.attemptId,
+      attemptNumber: 1,
+      endpointClass: "fixture_stream",
+      outputType: "assistant_text",
+    });
+    expect(usage).toMatchObject({
+      attemptId: started?.attemptId,
+      availability: "unavailable",
+    });
+  });
+
   it("observes a completed logical request without changing stream events", async () => {
     const provider: LLMProvider = {
       name: "fixture",
@@ -91,9 +145,10 @@ describe("withProviderTracing", () => {
     expect(streamed).toHaveLength(2);
     expect(events.map((event) => event.type)).toEqual([
       "provider_request_started",
+      "provider_usage_reported",
       "provider_request_completed",
     ]);
-    expect(events[1]).toMatchObject({
+    expect(events[2]).toMatchObject({
       trace,
       stopReason: "end_turn",
       requestedModel: "model-1",
@@ -119,9 +174,10 @@ describe("withProviderTracing", () => {
 
     expect(events.map((event) => event.type)).toEqual([
       "provider_request_started",
+      "provider_usage_reported",
       "provider_request_completed",
     ]);
-    expect(events[1]).toMatchObject({ stopReason: "end_turn" });
+    expect(events[2]).toMatchObject({ stopReason: "end_turn" });
   });
 
   it("fails the trace when consumption stops before a terminal event", async () => {
@@ -143,9 +199,10 @@ describe("withProviderTracing", () => {
 
     expect(events.map((event) => event.type)).toEqual([
       "provider_request_started",
+      "provider_usage_reported",
       "provider_request_failed",
     ]);
-    expect(events[1]).toMatchObject({
+    expect(events[2]).toMatchObject({
       errorName: "AbortError",
       message: "Provider stream consumption cancelled",
     });
@@ -176,8 +233,12 @@ describe("withProviderTracing", () => {
       }
     }).rejects.toBe(failure);
 
-    expect(observed).toHaveLength(1);
+    expect(observed).toHaveLength(2);
     expect(observed[0]).toMatchObject({
+      type: "provider_usage_reported",
+      availability: "unavailable",
+    });
+    expect(observed[1]).toMatchObject({
       type: "provider_request_failed",
       errorName: "Error",
       message: "upstream failed",

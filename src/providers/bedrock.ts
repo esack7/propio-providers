@@ -19,12 +19,15 @@ import {
   ProviderCapacityError,
 } from "../types.js";
 import { withRetry } from "../internal/withRetry.js";
+import { emitProviderResponseMetadata } from "../trace.js";
+import { emitNormalizedProviderUsage } from "../internal/providerMeasurements.js";
 
 interface BedrockStreamState {
   toolCalls: ChatToolCall[];
   currentToolCall: Partial<ChatToolCall> | null;
   currentToolInput: string;
   stopReason: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence";
+  rawStopReason?: string;
 }
 
 interface BedrockErrorDetails {
@@ -54,6 +57,14 @@ export class BedrockProvider extends BaseProvider {
         () => this.client.send(command, { abortSignal: request.signal }),
         this.createRetryOptions(request),
       );
+      emitProviderResponseMetadata({
+        provider: this.name,
+        request,
+        endpointClass: "converse_stream",
+        ...(response.$metadata?.requestId
+          ? { upstreamRequestId: response.$metadata.requestId }
+          : {}),
+      });
       const stream = this.getStreamFromResponse(response);
 
       if (!stream) {
@@ -69,6 +80,7 @@ export class BedrockProvider extends BaseProvider {
 
       for await (const event of stream as AsyncIterable<any>) {
         this.captureStopReason(event, state);
+        this.captureUsage(event, request);
         const assistantText = this.handleStreamEvent(event, state);
         if (assistantText) {
           yield { type: "assistant_text", delta: assistantText };
@@ -80,15 +92,22 @@ export class BedrockProvider extends BaseProvider {
       }
 
       // Emit normalized terminal event (Phase 4.5)
-      yield { type: "terminal", stopReason: state.stopReason };
+      yield {
+        type: "terminal",
+        stopReason: state.stopReason,
+        rawProviderReason: state.rawStopReason,
+      };
     } catch (error) {
       throw this.translateError(error);
     }
   }
 
   private createRetryOptions(request: ChatRequest) {
-    return this.buildBaseRetryOptions(request, (error) =>
-      this.isRetryableError(error),
+    return this.buildBaseRetryOptions(
+      request,
+      (error) => this.isRetryableError(error),
+      500,
+      "converse_stream",
     );
   }
 
@@ -106,8 +125,26 @@ export class BedrockProvider extends BaseProvider {
 
   private captureStopReason(event: any, state: BedrockStreamState): void {
     if (event.messageStop?.stopReason) {
+      state.rawStopReason = event.messageStop.stopReason;
       state.stopReason = this.mapStopReason(event.messageStop.stopReason);
     }
+  }
+
+  private captureUsage(event: any, request: ChatRequest): void {
+    const reported = event.metadata?.usage;
+    if (!reported) return;
+    emitNormalizedProviderUsage({
+      provider: this.name,
+      request,
+      endpointClass: "converse_stream",
+      usage: {
+        inputTokens: reported.inputTokens,
+        outputTokens: reported.outputTokens,
+        totalTokens: reported.totalTokens,
+        cacheReadInputTokens: reported.cacheReadInputTokens,
+        cacheWriteInputTokens: reported.cacheWriteInputTokens,
+      },
+    });
   }
 
   private createConverseStreamCommand(

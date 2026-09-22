@@ -198,4 +198,30 @@ describe("withRetry", () => {
     expect(result).toBe("success");
     expect(fn).toHaveBeenCalledTimes(3);
   });
+
+  it("supports immediate endpoint fallback within a logical retry cycle", async () => {
+    const random = jest.spyOn(Math, "random").mockReturnValue(0.5);
+    const fn = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("global"))
+      .mockRejectedValueOnce(new Error("us-east-1"))
+      .mockRejectedValueOnce(new Error("eu-west-1"))
+      .mockResolvedValueOnce("success");
+    const onRetry = jest.fn();
+
+    await withRetry(fn, {
+      maxRetries: 3,
+      isRetryable: () => true,
+      baseDelayMs: 10,
+      maxDelayMs: 10,
+      getBackoffAttempt: (attempt) =>
+        (attempt + 1) % 3 === 0 ? Math.floor(attempt / 3) : null,
+      onRetry,
+    });
+
+    expect(onRetry.mock.calls.map(([context]) => context.delayMs)).toEqual([
+      0, 0, 5,
+    ]);
+    random.mockRestore();
+  });
 });

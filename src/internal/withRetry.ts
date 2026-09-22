@@ -38,6 +38,12 @@ export interface WithRetryOptions {
   onAttemptStart?: (ctx: AttemptContext) => void;
   onAttemptSuccess?: (ctx: AttemptResultContext) => void;
   onAttemptFailure?: (ctx: AttemptFailureContext) => void;
+  /**
+   * Maps a physical attempt to its exponential-backoff position. Returning
+   * null retries immediately. This supports ordered endpoint fallback within
+   * one logical retry cycle without multiplying backoff waits.
+   */
+  getBackoffAttempt?: (attempt: number) => number | null;
 }
 
 function trackConsecutive529s(
@@ -68,18 +74,31 @@ function calculateRetryDelayMs(
   return Math.floor(Math.random() * cap);
 }
 
+function resolveRetryDelayMs(
+  attempt: number,
+  options: WithRetryOptions,
+): number {
+  const configuredBackoffAttempt = options.getBackoffAttempt?.(attempt);
+  const backoffAttempt =
+    configuredBackoffAttempt === undefined ? attempt : configuredBackoffAttempt;
+  if (backoffAttempt === null) return 0;
+  return calculateRetryDelayMs(
+    backoffAttempt,
+    options.baseDelayMs ?? 500,
+    options.maxDelayMs ?? 32_000,
+  );
+}
+
 function sleep(delayMs: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 export async function withRetry<T>(
-  fn: () => Promise<T>,
+  fn: (context: AttemptContext) => Promise<T>,
   opts: WithRetryOptions,
 ): Promise<T> {
   const {
     maxRetries,
-    baseDelayMs = 500,
-    maxDelayMs = 32_000,
     isRetryable,
     onFinalRetry,
     onRetry,
@@ -99,7 +118,7 @@ export async function withRetry<T>(
       }
 
       onAttemptStart?.({ attempt, maxRetries });
-      const result = await fn();
+      const result = await fn({ attempt, maxRetries });
       onAttemptSuccess?.({
         attempt,
         maxRetries,
@@ -120,7 +139,7 @@ export async function withRetry<T>(
         throw err;
       }
 
-      const delayMs = calculateRetryDelayMs(attempt, baseDelayMs, maxDelayMs);
+      const delayMs = resolveRetryDelayMs(attempt, opts);
 
       onRetry?.({ attempt, maxRetries, delayMs, err });
 

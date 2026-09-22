@@ -10,6 +10,8 @@ import {
   type OpenAIStreamToolCallAccumulator,
 } from "./shared.js";
 import type { ChatStreamEvent, StopReason } from "../types.js";
+import type { ChatRequest } from "../types.js";
+import { emitOpenAiCompatibleSseTrace } from "./providerMeasurements.js";
 
 interface OpenAIChatCompletionsStreamToolCallDelta {
   index?: number;
@@ -117,20 +119,36 @@ function parseOpenAiChatCompletionsStreamLine(
 export async function* consumeOpenAiChatCompletionsStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   toolCallsByIndex: Map<number, OpenAIStreamToolCallAccumulator>,
+  traceOptions?: {
+    readonly provider: string;
+    readonly request: ChatRequest;
+    readonly endpointClass: string;
+  },
 ): AsyncIterable<ChatStreamEvent> {
   let stopReason: StopReason = "end_turn";
+  let rawProviderReason: string | undefined;
+  const measurementState = { responseMetadataObserved: false };
 
   for await (const data of readSseDataLines(reader)) {
+    if (traceOptions) {
+      emitOpenAiCompatibleSseTrace({
+        data,
+        ...traceOptions,
+        state: measurementState,
+      });
+    }
     const result = parseOpenAiChatCompletionsStreamLine(data, toolCallsByIndex);
     if (result.stopReason) {
       stopReason = result.stopReason as StopReason;
+      rawProviderReason =
+        parseOpenAiChatCompletionsStreamChoice(data)?.finish_reason;
     }
     for (const event of result.events) {
       yield event;
     }
   }
 
-  yield { type: "terminal", stopReason };
+  yield { type: "terminal", stopReason, rawProviderReason };
 }
 
 export async function fetchOpenAiCompatibleStreamReader(options: {

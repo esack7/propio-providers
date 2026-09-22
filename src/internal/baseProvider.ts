@@ -37,6 +37,7 @@ export abstract class BaseProvider implements LLMProvider {
     request: ChatRequest,
     isRetryable: (error: unknown) => boolean,
     baseDelayMs = 500,
+    endpointClass?: string | ((attemptNumber: number) => string),
   ) {
     return createProviderRetryOptions({
       request,
@@ -47,6 +48,7 @@ export abstract class BaseProvider implements LLMProvider {
         : undefined,
       isRetryable,
       onDiagnosticEvent: this.onDiagnosticEvent,
+      endpointClass,
     });
   }
 
