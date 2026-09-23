@@ -21,7 +21,7 @@ import {
   ChatTool,
   ChatToolCall,
 } from "../types.js";
-import type { ProviderTraceEvent } from "../trace.js";
+import { withProviderTracing, type ProviderTraceEvent } from "../trace.js";
 
 // Variables for dynamic imports
 let BedrockProvider: any;
@@ -495,10 +495,45 @@ describe("BedrockProvider", () => {
     });
 
     it("should handle tool use in stream", async () => {
-      // Verify streamChat supports tool calls (structure validates in type translation tests)
-      // Just verify the method exists and returns an async iterable
-      const stream = provider.streamChat(createChatRequest("Use tool"));
-      expect(typeof (stream as any)[Symbol.asyncIterator]).toBe("function");
+      mockSend.mockResolvedValue({
+        output: (async function* () {
+          yield {
+            contentBlockStart: {
+              start: { toolUse: { toolUseId: "call-1", name: "my_tool" } },
+            },
+          };
+          yield {
+            contentBlockDelta: {
+              delta: { toolUse: { input: '{"key":"value"}' } },
+            },
+          };
+          yield { contentBlockStop: {} };
+          yield { messageStop: { stopReason: "tool_use" } };
+        })(),
+      });
+
+      const events = await consumeStream(provider, createToolChatRequest());
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "tool_calls",
+            toolCalls: [
+              expect.objectContaining({
+                id: "call-1",
+                function: {
+                  name: "my_tool",
+                  arguments: { key: "value" },
+                },
+              }),
+            ],
+          }),
+          expect.objectContaining({
+            type: "terminal",
+            stopReason: "tool_use",
+            rawProviderReason: "tool_use",
+          }),
+        ]),
+      );
     });
   });
 
@@ -662,5 +697,53 @@ describe("BedrockProvider", () => {
       type: "terminal",
       rawProviderReason: "end_turn",
     });
+  });
+
+  it("traces a throttled retry and unavailable usage", async () => {
+    const traceEvents: ProviderTraceEvent[] = [];
+    const throttled = Object.assign(new Error("throttled"), {
+      name: "ThrottlingException",
+    });
+    mockSend
+      .mockRejectedValueOnce(throttled)
+      .mockResolvedValueOnce({ output: createMockTextStream("ok") });
+
+    const streamed = await consumeStream(
+      withProviderTracing(
+        createTestProvider({
+          retryConfig: { maxRetries: 1, consecutive529Limit: 2 },
+        }),
+      ),
+      createChatRequest("hello", "test-model", {
+        trace: {
+          requestId: "bedrock-matrix-request",
+          operationId: "bedrock-matrix-operation",
+          purpose: "answer",
+        },
+        onTraceEvent: (event) => traceEvents.push(event),
+      }),
+    );
+
+    const attempts = traceEvents.filter(
+      (event) => event.type === "provider_attempt_started",
+    );
+    expect(streamed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "terminal", stopReason: "end_turn" }),
+      ]),
+    );
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]?.attemptId).not.toBe(attempts[1]?.attemptId);
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "provider_attempt_failed" }),
+        expect.objectContaining({ type: "provider_retry_wait" }),
+        expect.objectContaining({
+          type: "provider_usage_reported",
+          availability: "unavailable",
+        }),
+        expect.objectContaining({ type: "provider_request_completed" }),
+      ]),
+    );
   });
 });

@@ -8,8 +8,9 @@ import {
   ProviderInvalidRequestError,
 } from "../types.js";
 import { ChatRequest, ChatMessage } from "../types.js";
+import type { LLMProvider } from "../interface.js";
 import { ProviderDiagnosticEvent } from "../diagnostics.js";
-import type { ProviderTraceEvent } from "../trace.js";
+import { withProviderTracing, type ProviderTraceEvent } from "../trace.js";
 import {
   collectOpenRouterThinkingAndToolEvents,
   collectOpenRouterThinkingEvents,
@@ -78,7 +79,7 @@ function makeToolCallRequest(extras: Partial<ChatRequest> = {}): ChatRequest {
 
 /** Collects all `assistant_text` deltas from a streamChat call. */
 async function collectAssistantText(
-  provider: OpenRouterProvider,
+  provider: LLMProvider,
   request: ChatRequest,
 ): Promise<string> {
   let content = "";
@@ -402,7 +403,10 @@ describe("OpenRouterProvider", () => {
         captureRequestPayload: true,
         onTraceEvent: (event) => traceEvents.push(event),
       });
-      const content = await collectAssistantText(provider, request);
+      const content = await collectAssistantText(
+        withProviderTracing(provider),
+        request,
+      );
 
       expect(content).toBe("Recovered");
       expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -420,6 +424,22 @@ describe("OpenRouterProvider", () => {
       expect(payloads).toHaveLength(2);
       expect(payloads[0]?.requestBody).toEqual(firstBody);
       expect(payloads[1]?.requestBody).toEqual(secondBody);
+      const attempts = traceEvents.filter(
+        (event) => event.type === "provider_attempt_started",
+      );
+      expect(attempts).toHaveLength(2);
+      expect(attempts[0]?.attemptId).not.toBe(attempts[1]?.attemptId);
+      expect(traceEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "provider_attempt_failed" }),
+          expect.objectContaining({ type: "provider_retry_wait" }),
+          expect.objectContaining({
+            type: "provider_usage_reported",
+            availability: "unavailable",
+          }),
+          expect.objectContaining({ type: "provider_request_completed" }),
+        ]),
+      );
 
       expect(diagnosticEvents).toContainEqual(
         expect.objectContaining({
@@ -1061,8 +1081,12 @@ describe("OpenRouterProvider", () => {
         messages: [{ role: "user", content: "Weather?" }],
       });
       const results: Array<{ delta: string; toolCalls?: unknown[] }> = [];
+      let terminal:
+        | { stopReason: string; rawProviderReason?: string }
+        | undefined;
       for await (const chunk of provider.streamChat(request)) {
         results.push({ delta: chunk.delta, toolCalls: chunk.toolCalls });
+        if (chunk.type === "terminal") terminal = chunk;
       }
       const withToolCalls = results.filter(
         (r) => r.toolCalls && r.toolCalls.length > 0,
@@ -1075,6 +1099,10 @@ describe("OpenRouterProvider", () => {
       expect((withToolCalls[0].toolCalls as any)[0].function.arguments).toEqual(
         { location: "NYC" },
       );
+      expect(terminal).toMatchObject({
+        stopReason: "tool_use",
+        rawProviderReason: "tool_calls",
+      });
     });
 
     it("should normalize DSML tool markup into structured tool_calls", async () => {

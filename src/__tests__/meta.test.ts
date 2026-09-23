@@ -1,4 +1,5 @@
 import { MetaProvider } from "../providers/meta.js";
+import type { LLMProvider } from "../interface.js";
 import type { ChatRequest, ChatStreamEvent } from "../types.js";
 import {
   ProviderAuthenticationError,
@@ -9,7 +10,7 @@ import {
   ProviderRateLimitError,
 } from "../types.js";
 import { OpenRouterTestFixture } from "./openrouterTestHelpers.js";
-import type { ProviderTraceEvent } from "../trace.js";
+import { withProviderTracing, type ProviderTraceEvent } from "../trace.js";
 
 const DEFAULT_REQUEST: ChatRequest = {
   model: "muse-spark-1.1",
@@ -42,7 +43,7 @@ function successfulResponse(chunks: string[]): Partial<Response> {
 }
 
 async function collectEvents(
-  provider: MetaProvider,
+  provider: LLMProvider,
   request: ChatRequest = DEFAULT_REQUEST,
 ): Promise<ChatStreamEvent[]> {
   const events: ChatStreamEvent[] = [];
@@ -634,6 +635,7 @@ describe("MetaProvider", () => {
 
     it("retries transient failures with Meta diagnostics", async () => {
       const diagnostics: unknown[] = [];
+      const traceEvents: ProviderTraceEvent[] = [];
       globalThis.fetch = jest
         .fn()
         .mockResolvedValueOnce({
@@ -655,8 +657,32 @@ describe("MetaProvider", () => {
         onDiagnosticEvent: (event) => diagnostics.push(event),
       });
 
-      await collectEvents(provider);
+      await collectEvents(withProviderTracing(provider), {
+        ...DEFAULT_REQUEST,
+        trace: {
+          requestId: "meta-matrix-request",
+          operationId: "meta-matrix-operation",
+          purpose: "answer",
+        },
+        onTraceEvent: (event) => traceEvents.push(event),
+      });
       expect(fetch).toHaveBeenCalledTimes(2);
+      const attempts = traceEvents.filter(
+        (event) => event.type === "provider_attempt_started",
+      );
+      expect(attempts).toHaveLength(2);
+      expect(attempts[0]?.attemptId).not.toBe(attempts[1]?.attemptId);
+      expect(traceEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "provider_attempt_failed" }),
+          expect.objectContaining({ type: "provider_retry_wait" }),
+          expect.objectContaining({
+            type: "provider_usage_reported",
+            availability: "unavailable",
+          }),
+          expect.objectContaining({ type: "provider_request_completed" }),
+        ]),
+      );
       expect(diagnostics).toEqual([
         expect.objectContaining({
           type: "provider_retry",

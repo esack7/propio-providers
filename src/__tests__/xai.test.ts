@@ -1,5 +1,6 @@
 import { XaiProvider } from "../providers/xai.js";
-import type { ProviderTraceEvent } from "../trace.js";
+import { withProviderTracing, type ProviderTraceEvent } from "../trace.js";
+import type { ChatStreamEvent } from "../types.js";
 import { ProviderCapacityError, ProviderRateLimitError } from "../types.js";
 import {
   OPENAI_COMPATIBLE_PROVIDER_TEST_ENV,
@@ -424,6 +425,61 @@ describe("XaiProvider", () => {
             outputTokens: 7,
             reasoningTokens: 4,
           }),
+        }),
+      ]),
+    );
+  });
+
+  it("traces an unmetered streamed tool response and its termination", async () => {
+    const traceEvents: ProviderTraceEvent[] = [];
+    const streamed: ChatStreamEvent[] = [];
+    globalThis.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      body: createSseStream([
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"lookup","arguments":"{\\"key\\":\\"value\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+        "data: [DONE]\n\n",
+      ]),
+    });
+
+    for await (const event of withProviderTracing(createProvider()).streamChat({
+      ...DEFAULT_REQUEST,
+      trace: {
+        requestId: "xai-tool-matrix-request",
+        operationId: "xai-tool-matrix-operation",
+        purpose: "answer",
+      },
+      onTraceEvent: (event) => traceEvents.push(event),
+    })) {
+      streamed.push(event);
+    }
+
+    expect(streamed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_calls",
+          toolCalls: [
+            expect.objectContaining({
+              id: "call-1",
+              function: { name: "lookup", arguments: { key: "value" } },
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          type: "terminal",
+          stopReason: "tool_use",
+          rawProviderReason: "tool_calls",
+        }),
+      ]),
+    );
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "provider_usage_reported",
+          availability: "unavailable",
+        }),
+        expect.objectContaining({
+          type: "provider_request_completed",
+          stopReason: "tool_use",
         }),
       ]),
     );

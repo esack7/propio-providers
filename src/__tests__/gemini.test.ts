@@ -1,5 +1,5 @@
 import { GeminiProvider } from "../providers/gemini.js";
-import type { ProviderTraceEvent } from "../trace.js";
+import { withProviderTracing, type ProviderTraceEvent } from "../trace.js";
 import {
   ProviderAuthenticationError,
   ProviderContextLengthError,
@@ -735,6 +735,67 @@ describe("GeminiProvider", () => {
             reasoningTokens: 2,
           },
         }),
+      ]),
+    );
+  });
+
+  it("traces a capacity retry and unavailable usage", async () => {
+    const traceEvents: ProviderTraceEvent[] = [];
+    const terminalReasons: string[] = [];
+    globalThis.fetch = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        headers: new Headers(),
+        text: async () => "temporarily unavailable",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        body: createSseStream([
+          'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"STOP"}]}\n\n',
+          "data: [DONE]\n\n",
+        ]),
+      });
+
+    for await (const event of withProviderTracing(
+      createGeminiProvider({
+        retryConfig: {
+          maxRetries: 1,
+          consecutive529Limit: 2,
+          baseDelayMs: 0,
+        },
+      }),
+    ).streamChat({
+      model: "gemini-3.1-pro-preview",
+      messages: [{ role: "user", content: "hello" }],
+      trace: {
+        requestId: "gemini-matrix-request",
+        operationId: "gemini-matrix-operation",
+        purpose: "answer",
+      },
+      onTraceEvent: (event) => traceEvents.push(event),
+    })) {
+      if (event.type === "terminal") {
+        terminalReasons.push(`${event.stopReason}:${event.rawProviderReason}`);
+      }
+    }
+
+    const attempts = traceEvents.filter(
+      (event) => event.type === "provider_attempt_started",
+    );
+    expect(attempts).toHaveLength(2);
+    expect(terminalReasons).toEqual(["end_turn:STOP"]);
+    expect(attempts[0]?.attemptId).not.toBe(attempts[1]?.attemptId);
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "provider_attempt_failed" }),
+        expect.objectContaining({ type: "provider_retry_wait" }),
+        expect.objectContaining({
+          type: "provider_usage_reported",
+          availability: "unavailable",
+        }),
+        expect.objectContaining({ type: "provider_request_completed" }),
       ]),
     );
   });
