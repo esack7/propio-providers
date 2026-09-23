@@ -250,6 +250,7 @@ describe("XaiProvider", () => {
       for await (const chunk of provider.streamChat({
         model: "grok-4-1-fast-reasoning",
         messages: [{ role: "user", content: "Hi" }],
+        captureRequestPayload: true,
         trace: {
           requestId: "request-1",
           operationId: "operation-1",
@@ -261,6 +262,15 @@ describe("XaiProvider", () => {
       }
 
       expect(deltas).toEqual(["Hello"]);
+      expect(traceEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "provider_attempt_payload",
+            transport: "http_json",
+            requestBody: expect.objectContaining({ stream: true }),
+          }),
+        ]),
+      );
       expect(fetch).toHaveBeenNthCalledWith(
         1,
         "https://api.x.ai/v1/chat/completions",

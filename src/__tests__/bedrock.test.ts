@@ -621,6 +621,7 @@ describe("BedrockProvider", () => {
     const events = await consumeStream(
       createTestProvider(),
       createChatRequest("hello", "test-model", {
+        captureRequestPayload: true,
         trace: {
           requestId: "request-1",
           operationId: "operation-1",
@@ -630,6 +631,15 @@ describe("BedrockProvider", () => {
       }),
     );
 
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "provider_attempt_payload",
+          transport: "sdk_input",
+          requestBody: expect.objectContaining({ modelId: "test-model" }),
+        }),
+      ]),
+    );
     expect(traceEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

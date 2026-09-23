@@ -697,6 +697,7 @@ describe("GeminiProvider", () => {
     for await (const _event of createGeminiProvider().streamChat({
       model: "gemini-3.1-pro-preview",
       messages: [{ role: "user", content: "hello" }],
+      captureRequestPayload: true,
       trace: {
         requestId: "request-1",
         operationId: "operation-1",
@@ -707,6 +708,15 @@ describe("GeminiProvider", () => {
       // consume
     }
 
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "provider_attempt_payload",
+          transport: "http_json",
+          requestBody: expect.objectContaining({ stream: true }),
+        }),
+      ]),
+    );
     expect(traceEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

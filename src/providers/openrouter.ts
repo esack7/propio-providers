@@ -688,6 +688,10 @@ export class OpenRouterProvider extends OpenAiCompatibleProvider {
         isRetryable: (err) => this.isRetryableError(err),
         onDiagnosticEvent: (event) => this.emitDiagnostic(event),
         endpointClass: "chat_completions",
+        requestPayload: () => ({
+          transport: "http_json",
+          requestBody: this.buildRequestBody(request, !dropTools),
+        }),
       }),
       onFinalRetry: ({ attempt }) => {
         if (attempt === 0 || !request.tools?.length) return;

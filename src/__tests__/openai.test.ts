@@ -770,6 +770,7 @@ describe("OpenAiProvider", () => {
 
     await collectEvents(createProvider(), {
       ...DEFAULT_REQUEST,
+      captureRequestPayload: true,
       trace: {
         requestId: "request-1",
         operationId: "operation-1",
@@ -778,6 +779,15 @@ describe("OpenAiProvider", () => {
       onTraceEvent: (event) => traceEvents.push(event),
     });
 
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "provider_attempt_payload",
+          transport: "http_json",
+          requestBody: expect.objectContaining({ stream: true }),
+        }),
+      ]),
+    );
     expect(traceEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

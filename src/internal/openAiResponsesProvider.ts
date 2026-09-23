@@ -154,6 +154,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
           this.retryConfig,
           this.onDiagnosticEvent,
           "responses",
+          () => ({ transport: "http_json", requestBody: body }),
         ),
       );
       const reader = response.body?.getReader();

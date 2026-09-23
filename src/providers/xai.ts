@@ -186,7 +186,7 @@ export class XaiProvider extends OpenAiCompatibleProvider {
         endpointClass = this.xaiEndpointClass(apiUrl);
         return this.createPostResponse(apiUrl, body, request.signal);
       },
-      this.buildEndpointRetryOptions(request, apiUrls, retryState),
+      this.buildEndpointRetryOptions(request, apiUrls, retryState, body),
     );
 
     const reader = this.getResponseReader(response);
@@ -201,6 +201,7 @@ export class XaiProvider extends OpenAiCompatibleProvider {
     request: ChatRequest,
     apiUrls: readonly string[],
     state: XaiEndpointRetryState,
+    body: Record<string, unknown>,
   ): WithRetryOptions {
     const configuredRetries = this.retryConfig?.maxRetries ?? 3;
     const base = this.buildRetryOptions(
@@ -209,6 +210,7 @@ export class XaiProvider extends OpenAiCompatibleProvider {
       this.endpointRetryConfig(apiUrls.length),
       this.onDiagnosticEvent,
       () => this.xaiEndpointClass(apiUrls[state.endpointIndex]!),
+      () => ({ transport: "http_json", requestBody: body }),
     );
     const baseOnRetry = base.onRetry;
 

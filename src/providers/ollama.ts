@@ -170,14 +170,14 @@ export class OllamaProvider implements LLMProvider {
   private async createOllamaStream(request: ChatRequest) {
     const messages = this.createOllamaMessages(request);
     const tools = this.createOllamaTools(request);
+    const body = {
+      model: request.model || this.model,
+      messages,
+      stream: true as const,
+      ...(tools && { tools }),
+    };
     return await withRetry(
-      () =>
-        this.ollama.chat({
-          model: request.model || this.model,
-          messages,
-          stream: true,
-          ...(tools && { tools }),
-        }),
+      () => this.ollama.chat(body),
       createProviderRetryOptions({
         request,
         model: this.model,
@@ -186,6 +186,7 @@ export class OllamaProvider implements LLMProvider {
         isRetryable: (err) => this.isRetryableError(err),
         onDiagnosticEvent: this.onDiagnosticEvent,
         endpointClass: "ollama_chat",
+        requestPayload: () => ({ transport: "sdk_input", requestBody: body }),
       }),
     );
   }

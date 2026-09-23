@@ -111,28 +111,26 @@ export class AnthropicProvider extends BaseProvider {
         request.requestReasoning === true,
       );
 
+      const body = {
+        model,
+        max_tokens: reasoningRequest.maxTokens,
+        system: systemContent,
+        messages: messages as Anthropic.MessageParam[],
+        tools: anthropicTools as Anthropic.Tool[] | undefined,
+        ...(reasoningRequest.thinking
+          ? { thinking: reasoningRequest.thinking }
+          : {}),
+        ...(reasoningRequest.output_config
+          ? { output_config: reasoningRequest.output_config }
+          : {}),
+        stream: true as const,
+      };
       const createStream = () =>
-        this.client.messages.create(
-          {
-            model,
-            max_tokens: reasoningRequest.maxTokens,
-            system: systemContent,
-            messages: messages as Anthropic.MessageParam[],
-            tools: anthropicTools as Anthropic.Tool[] | undefined,
-            ...(reasoningRequest.thinking
-              ? { thinking: reasoningRequest.thinking }
-              : {}),
-            ...(reasoningRequest.output_config
-              ? { output_config: reasoningRequest.output_config }
-              : {}),
-            stream: true,
-          },
-          { signal: request.signal },
-        );
+        this.client.messages.create(body, { signal: request.signal });
 
       const stream = (await withRetry(
         createStream,
-        this.createRetryOptions(request),
+        this.createRetryOptions(request, body),
       )) as AsyncIterable<Anthropic.MessageStreamEvent>;
 
       const state: AnthropicStreamState = {
@@ -647,12 +645,13 @@ export class AnthropicProvider extends BaseProvider {
     429, 500, 502, 503, 504, 529,
   ]);
 
-  private createRetryOptions(request: ChatRequest) {
+  private createRetryOptions(request: ChatRequest, body: unknown) {
     return this.buildBaseRetryOptions(
       request,
       (error) => this.isRetryableError(error),
       500,
       "messages",
+      () => ({ transport: "sdk_input", requestBody: body }),
     );
   }
 

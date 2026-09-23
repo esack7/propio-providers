@@ -93,6 +93,10 @@ export abstract class OpenAiCompatibleProvider implements LLMProvider {
     retryConfig: OpenAiCompatibleRetryConfig | undefined,
     onDiagnosticEvent?: ProviderDiagnosticListener,
     endpointClass?: string | ((attemptNumber: number) => string),
+    requestPayload?: (attemptNumber: number) => {
+      readonly transport: "http_json" | "sdk_input";
+      readonly requestBody: unknown;
+    },
   ): WithRetryOptions {
     return createProviderRetryOptions({
       request,
@@ -102,6 +106,7 @@ export abstract class OpenAiCompatibleProvider implements LLMProvider {
       isRetryable: (err) => this.isRetryableError(err),
       onDiagnosticEvent,
       endpointClass,
+      requestPayload,
     });
   }
 

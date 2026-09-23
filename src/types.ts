@@ -77,6 +77,8 @@ export interface ChatRequest {
   trace?: import("./trace.js").ProviderTraceContext;
   /** Optional request observer. Exceptions are isolated from provider behavior. */
   onTraceEvent?: import("./trace.js").ProviderTraceObserver;
+  /** Opt in to observing the per-attempt adapter payload (which may contain private data). */
+  captureRequestPayload?: boolean;
 }
 
 /**
