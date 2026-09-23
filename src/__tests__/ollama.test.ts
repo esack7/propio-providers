@@ -8,7 +8,8 @@ jest.unstable_mockModule("ollama", () => ({
   Ollama: mockOllamaConstructor,
 }));
 
-import type { ProviderTraceEvent } from "../trace.js";
+import { withProviderTracing, type ProviderTraceEvent } from "../trace.js";
+import { ProviderError, type ChatStreamEvent } from "../types.js";
 
 // Dynamic imports after mocks are set up
 let OllamaProvider: any;
@@ -442,5 +443,100 @@ describe("OllamaProvider", () => {
         }),
       ]),
     );
+  });
+
+  it("traces a retry and unavailable usage for an unmetered response", async () => {
+    const traceEvents: ProviderTraceEvent[] = [];
+    const streamed: ChatStreamEvent[] = [];
+    mockChat
+      .mockRejectedValueOnce(new ProviderError("temporary Ollama failure"))
+      .mockResolvedValueOnce(
+        (async function* () {
+          yield { message: { content: "ok" } };
+          yield { message: {}, done_reason: "stop" };
+        })(),
+      );
+
+    for await (const event of withProviderTracing(
+      createTestProvider({
+        retryConfig: { maxRetries: 1, consecutive529Limit: 2 },
+      }),
+    ).streamChat({
+      model: "test-model",
+      messages: [{ role: "user", content: "hello" }],
+      trace: {
+        requestId: "ollama-matrix-request",
+        operationId: "ollama-matrix-operation",
+        purpose: "answer",
+      },
+      onTraceEvent: (event: ProviderTraceEvent) => traceEvents.push(event),
+    })) {
+      streamed.push(event);
+    }
+
+    const attempts = traceEvents.filter(
+      (event) => event.type === "provider_attempt_started",
+    );
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]?.attemptId).not.toBe(attempts[1]?.attemptId);
+    expect(streamed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "terminal",
+          stopReason: "end_turn",
+          rawProviderReason: "stop",
+        }),
+      ]),
+    );
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "provider_attempt_failed" }),
+        expect.objectContaining({ type: "provider_retry_wait" }),
+        expect.objectContaining({
+          type: "provider_usage_reported",
+          availability: "unavailable",
+        }),
+        expect.objectContaining({ type: "provider_request_completed" }),
+      ]),
+    );
+  });
+
+  it("records an exhausted Ollama failure without claiming completion", async () => {
+    const traceEvents: ProviderTraceEvent[] = [];
+    mockChat.mockRejectedValue(new ProviderError("connection refused"));
+    const request = {
+      model: "test-model",
+      messages: [{ role: "user" as const, content: "hello" }],
+      trace: {
+        requestId: "ollama-failure-request",
+        operationId: "ollama-failure-operation",
+        purpose: "answer" as const,
+      },
+      onTraceEvent: (event: ProviderTraceEvent) => traceEvents.push(event),
+    };
+
+    await expect(async () => {
+      for await (const _event of withProviderTracing(
+        createTestProvider({
+          retryConfig: { maxRetries: 0, consecutive529Limit: 1 },
+        }),
+      ).streamChat(request)) {
+        // consume
+      }
+    }).rejects.toThrow(ProviderError);
+
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "provider_attempt_failed" }),
+        expect.objectContaining({
+          type: "provider_usage_reported",
+          availability: "unavailable",
+        }),
+        expect.objectContaining({ type: "provider_request_failed" }),
+      ]),
+    );
+    expect(
+      traceEvents.some((event) => event.type === "provider_request_completed"),
+    ).toBe(false);
   });
 });

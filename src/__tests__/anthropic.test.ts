@@ -39,7 +39,7 @@ import {
   ProviderContextLengthError,
   ProviderError,
 } from "../types.js";
-import type { ProviderTraceEvent } from "../trace.js";
+import { withProviderTracing, type ProviderTraceEvent } from "../trace.js";
 
 let AnthropicProvider: any;
 
@@ -943,6 +943,55 @@ describe("AnthropicProvider", () => {
           cacheWriteInputTokens: 2,
         }),
       }),
+    );
+  });
+
+  it("traces a retry and unavailable usage without inventing token counts", async () => {
+    const traceEvents: ProviderTraceEvent[] = [];
+    mockStream
+      .mockRejectedValueOnce(new MockAPIError(529, "temporarily overloaded"))
+      .mockResolvedValueOnce(makeStream(textStreamEvents("ok")));
+
+    const streamed = await collectStream(
+      withProviderTracing(
+        createTestProvider({
+          retryConfig: { maxRetries: 1, consecutive529Limit: 2 },
+        }),
+      ),
+      createChatRequest("hello", {
+        trace: {
+          requestId: "anthropic-matrix-request",
+          operationId: "anthropic-matrix-operation",
+          purpose: "answer",
+        },
+        onTraceEvent: (event) => traceEvents.push(event),
+      }),
+    );
+
+    const attempts = traceEvents.filter(
+      (event) => event.type === "provider_attempt_started",
+    );
+    expect(streamed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "terminal",
+          stopReason: "end_turn",
+          rawProviderReason: "end_turn",
+        }),
+      ]),
+    );
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]?.attemptId).not.toBe(attempts[1]?.attemptId);
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "provider_attempt_failed" }),
+        expect.objectContaining({ type: "provider_retry_wait" }),
+        expect.objectContaining({
+          type: "provider_usage_reported",
+          availability: "unavailable",
+        }),
+        expect.objectContaining({ type: "provider_request_completed" }),
+      ]),
     );
   });
 });
