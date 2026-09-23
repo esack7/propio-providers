@@ -71,6 +71,13 @@ export type ProviderTraceEvent =
       readonly type: "provider_attempt_started";
     } & ProviderAttemptIdentity)
   | (ProviderTraceEventBase & {
+      readonly type: "provider_attempt_payload";
+      /** HTTP JSON body or SDK command/input, before SDK-specific serialization. */
+      readonly transport: "http_json" | "sdk_input" | "unavailable";
+      readonly requestBody?: unknown;
+      readonly unavailableReason?: "adapter_payload_capture_failed";
+    } & ProviderAttemptIdentity)
+  | (ProviderTraceEventBase & {
       readonly type: "provider_attempt_connected";
       readonly durationMs: number;
     } & ProviderAttemptIdentity)
@@ -159,6 +166,10 @@ export function createProviderAttemptTraceHooks(options: {
   readonly provider: string;
   readonly request: ChatRequest;
   readonly endpointClass?: string | ((attemptNumber: number) => string);
+  readonly requestPayload?: (attemptNumber: number) => {
+    readonly transport: "http_json" | "sdk_input";
+    readonly requestBody: unknown;
+  };
 }): Pick<
   import("./internal/withRetry.js").WithRetryOptions,
   "onAttemptStart" | "onAttemptSuccess" | "onAttemptFailure" | "onRetry"
@@ -189,12 +200,35 @@ export function createProviderAttemptTraceHooks(options: {
   return {
     onAttemptStart: ({ attempt }) => {
       const fields = base();
-      if (fields)
+      if (fields) {
         emit({
           ...fields,
           type: "provider_attempt_started",
           ...attemptIdentity(attempt),
         });
+        if (options.request.captureRequestPayload && options.requestPayload) {
+          const payloadFields = base();
+          if (!payloadFields) return;
+          try {
+            const payload = options.requestPayload(attempt + 1);
+            emit({
+              ...payloadFields,
+              type: "provider_attempt_payload",
+              ...attemptIdentity(attempt),
+              transport: payload.transport,
+              requestBody: structuredClone(payload.requestBody),
+            });
+          } catch {
+            emit({
+              ...payloadFields,
+              type: "provider_attempt_payload",
+              ...attemptIdentity(attempt),
+              transport: "unavailable",
+              unavailableReason: "adapter_payload_capture_failed",
+            });
+          }
+        }
+      }
     },
     onAttemptSuccess: ({ attempt, durationMs }) => {
       const fields = base();

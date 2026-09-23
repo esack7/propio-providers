@@ -52,10 +52,11 @@ export class BedrockProvider extends BaseProvider {
 
   async *streamChat(request: ChatRequest): AsyncIterable<ChatStreamEvent> {
     try {
-      const command = this.createConverseStreamCommand(request);
+      const input = this.createConverseStreamInput(request);
+      const command = new ConverseStreamCommand(input);
       const response = await withRetry(
         () => this.client.send(command, { abortSignal: request.signal }),
-        this.createRetryOptions(request),
+        this.createRetryOptions(request, input),
       );
       emitProviderResponseMetadata({
         provider: this.name,
@@ -102,12 +103,16 @@ export class BedrockProvider extends BaseProvider {
     }
   }
 
-  private createRetryOptions(request: ChatRequest) {
+  private createRetryOptions(
+    request: ChatRequest,
+    input: ConverseStreamCommand["input"],
+  ) {
     return this.buildBaseRetryOptions(
       request,
       (error) => this.isRetryableError(error),
       500,
       "converse_stream",
+      () => ({ transport: "sdk_input", requestBody: input }),
     );
   }
 
@@ -147,9 +152,9 @@ export class BedrockProvider extends BaseProvider {
     });
   }
 
-  private createConverseStreamCommand(
+  private createConverseStreamInput(
     request: ChatRequest,
-  ): ConverseStreamCommand {
+  ): ConverseStreamCommand["input"] {
     const systemMessage = request.messages.find((m) => m.role === "system");
     const messages = request.messages
       .filter((m) => m.role !== "system")
@@ -160,12 +165,12 @@ export class BedrockProvider extends BaseProvider {
         }
       : undefined;
 
-    return new ConverseStreamCommand({
+    return {
       modelId: request.model || this.model,
       messages: messages as any,
       system: systemMessage ? [{ text: systemMessage.content }] : undefined,
       toolConfig: toolConfig as any,
-    });
+    };
   }
 
   private getStreamFromResponse(

@@ -399,6 +399,7 @@ describe("OpenRouterProvider", () => {
       const request = makeToolCallRequest({
         iteration: 3,
         trace: traceContext,
+        captureRequestPayload: true,
         onTraceEvent: (event) => traceEvents.push(event),
       });
       const content = await collectAssistantText(provider, request);
@@ -413,6 +414,12 @@ describe("OpenRouterProvider", () => {
       expect(secondBody.model).toBe("openai/gpt-3.5-turbo");
       expect(secondBody.messages).toEqual(firstBody.messages);
       expect(secondBody.messages).toEqual([{ role: "user", content: "Hello" }]);
+      const payloads = traceEvents.filter(
+        (event) => event.type === "provider_attempt_payload",
+      );
+      expect(payloads).toHaveLength(2);
+      expect(payloads[0]?.requestBody).toEqual(firstBody);
+      expect(payloads[1]?.requestBody).toEqual(secondBody);
 
       expect(diagnosticEvents).toContainEqual(
         expect.objectContaining({

@@ -107,11 +107,16 @@ export function createProviderRetryOptions(options: {
   isRetryable: (err: unknown) => boolean;
   onDiagnosticEvent?: ProviderDiagnosticListener;
   endpointClass?: string | ((attemptNumber: number) => string);
+  requestPayload?: (attemptNumber: number) => {
+    readonly transport: "http_json" | "sdk_input";
+    readonly requestBody: unknown;
+  };
 }): WithRetryOptions {
   const traceHooks = createProviderAttemptTraceHooks({
     provider: options.provider,
     request: options.request,
     endpointClass: options.endpointClass,
+    requestPayload: options.requestPayload,
   });
   const retryOptions: WithRetryOptions = {
     maxRetries: options.retryConfig?.maxRetries ?? 3,

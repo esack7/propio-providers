@@ -38,6 +38,10 @@ export abstract class BaseProvider implements LLMProvider {
     isRetryable: (error: unknown) => boolean,
     baseDelayMs = 500,
     endpointClass?: string | ((attemptNumber: number) => string),
+    requestPayload?: (attemptNumber: number) => {
+      readonly transport: "http_json" | "sdk_input";
+      readonly requestBody: unknown;
+    },
   ) {
     return createProviderRetryOptions({
       request,
@@ -49,6 +53,7 @@ export abstract class BaseProvider implements LLMProvider {
       isRetryable,
       onDiagnosticEvent: this.onDiagnosticEvent,
       endpointClass,
+      requestPayload,
     });
   }
 

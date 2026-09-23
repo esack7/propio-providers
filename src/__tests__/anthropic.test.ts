@@ -899,6 +899,7 @@ describe("AnthropicProvider", () => {
     await collectStream(
       createTestProvider(),
       createChatRequest("hello", {
+        captureRequestPayload: true,
         trace: {
           requestId: "request-1",
           operationId: "operation-1",
@@ -908,6 +909,15 @@ describe("AnthropicProvider", () => {
       }),
     );
 
+    expect(traceEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "provider_attempt_payload",
+          transport: "sdk_input",
+          requestBody: expect.objectContaining({ model: SONNET_46_MODEL }),
+        }),
+      ]),
+    );
     expect(traceEvents).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

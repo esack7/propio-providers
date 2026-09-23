@@ -516,6 +516,7 @@ export class GeminiProvider extends OpenAiCompatibleProvider {
         this.retryConfig,
         this.onDiagnosticEvent,
         "chat_completions",
+        () => ({ transport: "http_json", requestBody: body }),
       ),
       translateError: (error) => this.translateError(error),
     });

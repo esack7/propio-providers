@@ -25,6 +25,92 @@ function request(
 }
 
 describe("withProviderTracing", () => {
+  it("captures an isolated adapter payload for each physical attempt only when opted in", async () => {
+    const events: ProviderTraceEvent[] = [];
+    const body = { messages: [{ content: "first" }] };
+    const tracedRequest = {
+      ...request((event) => events.push(event)),
+      captureRequestPayload: true,
+    };
+    let calls = 0;
+    await withRetry(
+      async () => {
+        calls++;
+        if (calls === 1) {
+          body.messages[0]!.content = "second";
+          throw new Error("retry");
+        }
+      },
+      createProviderRetryOptions({
+        request: tracedRequest,
+        model: "model-1",
+        provider: "fixture",
+        retryConfig: { maxRetries: 1, consecutive529Limit: 2, baseDelayMs: 0 },
+        isRetryable: () => true,
+        requestPayload: () => ({ transport: "http_json", requestBody: body }),
+      }),
+    );
+    const payloads = events.filter(
+      (event) => event.type === "provider_attempt_payload",
+    );
+    expect(payloads).toHaveLength(2);
+    expect(payloads.map((event) => event.requestBody)).toEqual([
+      { messages: [{ content: "first" }] },
+      { messages: [{ content: "second" }] },
+    ]);
+    expect(payloads[0]?.attemptId).not.toBe(payloads[1]?.attemptId);
+    expect(new Set(events.map((event) => event.eventId)).size).toBe(
+      events.length,
+    );
+
+    events.length = 0;
+    await withRetry(
+      async () => "ok",
+      createProviderRetryOptions({
+        request: request((event) => events.push(event)),
+        model: "model-1",
+        provider: "fixture",
+        retryConfig: { maxRetries: 0, consecutive529Limit: 1 },
+        isRetryable: () => false,
+        requestPayload: () => ({ transport: "http_json", requestBody: body }),
+      }),
+    );
+    expect(
+      events.some((event) => event.type === "provider_attempt_payload"),
+    ).toBe(false);
+  });
+
+  it("reports an unavailable adapter payload without changing the provider attempt", async () => {
+    const events: ProviderTraceEvent[] = [];
+    await expect(
+      withRetry(
+        async () => "connected",
+        createProviderRetryOptions({
+          request: {
+            ...request((event) => events.push(event)),
+            captureRequestPayload: true,
+          },
+          model: "model-1",
+          provider: "fixture",
+          retryConfig: { maxRetries: 0, consecutive529Limit: 1 },
+          isRetryable: () => false,
+          requestPayload: () => {
+            throw new Error("private adapter failure");
+          },
+        }),
+      ),
+    ).resolves.toBe("connected");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "provider_attempt_payload",
+          transport: "unavailable",
+          unavailableReason: "adapter_payload_capture_failed",
+        }),
+      ]),
+    );
+  });
+
   it("assigns distinct identities to retry attempts and links retry waits", async () => {
     const events: ProviderTraceEvent[] = [];
     const tracedRequest = request((event) => events.push(event));
