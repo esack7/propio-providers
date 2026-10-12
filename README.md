@@ -227,8 +227,6 @@ The source runs before each request attempt and must durably persist rotating cr
 
 Text is supported; images and hosted tools are explicitly rejected pending verification. Safe plan-specific `ChatGptPlanError` metadata includes code/status/request ID. Generic HTTP authentication, missing-model, invalid-request and rate-limit failures retain their existing typed provider errors; context-length and invalid-subscriber codes are typed too. Generic HTTP 429 admission failures can retry within the caller's retry budget; plan usage limits and ambiguous transport failures do not replay. Usage included in a failed stream is traced without admitting tools or recording successful completion. Plan limits link to [Manage usage](https://chatgpt.com/settings/usage), and do not trigger billing changes.
 
-Recorded live evidence for the public endpoint, namespace tool wrapper and result continuation is available in the [subscription round-trip report](https://github.com/esack7/propio-providers/blob/feature/openai-subscription/docs/openai-subscription-live-check.md). This is one registration/model check, with simulated coverage retained for failure cases.
-
 ## License
 
 MIT
