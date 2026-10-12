@@ -79,6 +79,8 @@ function validateProviderConfig(provider: any, seenNames: Set<string>): void {
     validateOpenRouterProviderConfig(provider);
   }
 
+  if (provider.type === "openai") validateOpenAiAuthConfig(provider);
+
   validateDefaultModel(provider);
 }
 
@@ -312,4 +314,26 @@ export function updateDefaultProviderModelSelection(
   };
 
   return validateProvidersConfig(updatedConfig);
+}
+
+/** Validate the billing boundary independently of factory construction. */
+export function validateOpenAiAuthConfig(provider: {
+  auth?: unknown;
+  apiKey?: unknown;
+}): void {
+  if (provider.auth === undefined) return;
+  const auth = provider.auth;
+  if (
+    !isPlainObject(auth) ||
+    !["api-key", "chatgpt"].includes(String(auth.mode))
+  )
+    throw new Error("OpenAI auth.mode must be api-key or chatgpt.");
+  if (auth.mode === "chatgpt") {
+    if (!isNonEmptyString(auth.accountId))
+      throw new Error("ChatGPT auth requires a non-empty accountId.");
+    if (provider.apiKey !== undefined)
+      throw new Error(
+        "ChatGPT access cannot include an API key; choose billing explicitly.",
+      );
+  }
 }

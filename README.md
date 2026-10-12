@@ -113,7 +113,7 @@ The provider reads only the namespaced `META_API_KEY` environment variable; it d
 
 ### Factory
 
-- `createProvider(config, modelKey?, onDiagnosticEvent?, debugLoggingEnabled?, retryConfig?)` — instantiate an `LLMProvider` from a `ProviderConfig`
+- `createProvider(config, modelKey?, onDiagnosticEvent?, debugLoggingEnabled?, retryConfig?, runtimeOptions?)` — instantiate an `LLMProvider` from a `ProviderConfig`
 - `extractModelFromConfig(config)` — read the default model key from a provider config
 
 ### Provider contract
@@ -173,6 +173,59 @@ npm test              # unit tests
 npm run test:integration  # live-API tests (needs provider credentials)
 npm run build
 ```
+
+## ChatGPT plan access
+
+OpenAI API access remains the default when `auth` is absent or `{ mode: "api-key" }`. ChatGPT plan access is explicit and never reads an API environment key or falls back to API billing. The application owns browser sign-in, secure storage, renewal and account selection.
+
+```ts
+import {
+  createProvider,
+  OpenAiSubscriptionProvider,
+} from "@propio-ai/providers";
+
+// applicationCredentials is your application's immutable account registry.
+const config = {
+  type: "openai" as const,
+  name: "openai-personal",
+  auth: { mode: "chatgpt" as const, accountId: "your-registration-id" },
+  defaultModel: "your-discovered-model",
+  models: [
+    {
+      key: "your-discovered-model",
+      name: "Selected model",
+      contextWindowTokens: 128000,
+    },
+  ],
+};
+const provider = createProvider(
+  config,
+  undefined,
+  undefined,
+  false,
+  undefined,
+  {
+    openAiSubscription: { idleTimeoutMs: 600000 }, // Optional: ten-minute idle bound.
+    openAiCredentialSource: (accountId) => ({
+      getAccessToken: (signal) =>
+        applicationCredentials.getAccessToken(accountId, signal),
+    }),
+  },
+);
+
+// Or construct directly, with the same caller-owned renewable source.
+const direct = new OpenAiSubscriptionProvider({
+  model: config.defaultModel,
+  contextWindowTokens: 128000, // User-selected prompt budget; not catalog capacity evidence.
+  idleTimeoutMs: 600000, // Optional; the default is five minutes between chunks.
+  getAccessToken: (signal) =>
+    applicationCredentials.getAccessToken(config.auth.accountId, signal),
+});
+```
+
+The source runs before each request attempt and must durably persist rotating credentials before returning a token. No API-key environment variable is read when this source is supplied. Do not serialize the source or tokens into provider configuration. Public Responses requests use developer instructions, full-history replay and local namespaced functions. Tools and terminal success require `response.completed`; failures, incomplete/EOF, malformed streams, abort and idle timeout stop tool admission. The five-minute idle timeout resets per chunk and can be adjusted through `idleTimeoutMs` directly or `runtimeOptions.openAiSubscription.idleTimeoutMs` in the factory (positive integer milliseconds up to 2147483647). It does not apply to existing API providers.
+
+Text is supported; images and hosted tools are explicitly rejected pending verification. Safe plan-specific `ChatGptPlanError` metadata includes code/status/request ID. Generic HTTP authentication, missing-model, invalid-request and rate-limit failures retain their existing typed provider errors; context-length and invalid-subscriber codes are typed too. Generic HTTP 429 admission failures can retry within the caller's retry budget; plan usage limits and ambiguous transport failures do not replay. Usage included in a failed stream is traced without admitting tools or recording successful completion. Plan limits link to [Manage usage](https://chatgpt.com/settings/usage), and do not trigger billing changes.
 
 ## License
 

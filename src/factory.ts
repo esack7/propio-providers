@@ -1,3 +1,6 @@
+import { validateOpenAiAuthConfig } from "./configValidation.js";
+import { OpenAiSubscriptionProvider } from "./providers/openaiSubscription.js";
+
 import { LLMProvider } from "./interface.js";
 import {
   ProviderConfig,
@@ -25,6 +28,15 @@ import { CloudflareProvider } from "./providers/cloudflare.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
 import { OpenAiProvider } from "./providers/openai.js";
 import { MetaProvider } from "./providers/meta.js";
+
+/** Caller-owned, immutable registration binding; never serialized into config. */
+export interface ProviderRuntimeOptions {
+  readonly openAiCredentialSource?: (accountId: string) => {
+    readonly getAccessToken: (signal?: AbortSignal) => Promise<string>;
+  };
+  /** Applies only to explicit ChatGPT plan providers; defaults to five minutes. */
+  readonly openAiSubscription?: { readonly idleTimeoutMs?: number };
+}
 
 /**
  * Factory function to create LLM provider instances from configuration.
@@ -64,6 +76,7 @@ export function createProvider(
   onDiagnosticEvent?: ProviderDiagnosticListener,
   debugLoggingEnabled = false,
   retryConfig?: ProviderRetryConfig,
+  runtimeOptions?: ProviderRuntimeOptions,
 ): LLMProvider {
   const model = modelKey || config.defaultModel;
 
@@ -168,6 +181,24 @@ export function createProvider(
     case "openai": {
       const openAiConfig = config as OpenAiProviderConfig;
       const modelConfig = resolveModelConfig();
+      validateOpenAiAuthConfig(openAiConfig);
+      if (openAiConfig.auth?.mode === "chatgpt") {
+        const source = runtimeOptions?.openAiCredentialSource?.(
+          openAiConfig.auth.accountId,
+        );
+        if (!source)
+          throw new Error(
+            "ChatGPT access requires a caller-owned openAiCredentialSource for the selected account.",
+          );
+        return new OpenAiSubscriptionProvider({
+          model,
+          contextWindowTokens: modelConfig.contextWindowTokens,
+          getAccessToken: source.getAccessToken,
+          idleTimeoutMs: runtimeOptions?.openAiSubscription?.idleTimeoutMs,
+          retryConfig,
+          onDiagnosticEvent,
+        });
+      }
       return new OpenAiProvider({
         model,
         contextWindowTokens: modelConfig.contextWindowTokens,

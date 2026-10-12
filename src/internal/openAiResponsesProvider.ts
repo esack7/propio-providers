@@ -55,10 +55,12 @@ interface ResponsesStreamEvent {
   delta?: string;
   output_index?: number;
   item?: Record<string, unknown> & ResponsesFunctionCall;
+  error?: { code?: string; message?: string; param?: string };
   response?: {
     id?: string;
     model?: string;
     status?: string;
+    error?: { code?: string; message?: string; param?: string };
     usage?: {
       input_tokens?: number;
       output_tokens?: number;
@@ -113,6 +115,15 @@ export interface OpenAiResponsesProviderProfile {
   readonly preserveAssistantCommentary?: boolean;
   /** Route Responses API commentary output to the shared thinking stream. */
   readonly routeCommentaryToThinking?: boolean;
+  /** Subscription inference must explicitly complete before tools can execute. */
+  readonly requireCompletedResponse?: boolean;
+}
+
+export interface OpenAiResponsesProviderOptions extends OpenAiCompatibleProviderOptions {
+  /** Application-owned credentials, resolved for each network attempt. */
+  readonly getBearerToken?: (signal?: AbortSignal) => Promise<string>;
+  /** Subscription stream inactivity bound; does not apply to API providers. */
+  readonly idleTimeoutMs?: number;
 }
 
 /** Shared implementation for providers exposing the OpenAI Responses wire API. */
@@ -120,26 +131,32 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
   readonly name: string;
   private readonly model: string;
   private readonly apiKey: string;
+  private readonly getBearerToken?: OpenAiResponsesProviderOptions["getBearerToken"];
   private readonly retryConfig?: OpenAiCompatibleProviderOptions["retryConfig"];
   private readonly onDiagnosticEvent?: ProviderDiagnosticListener;
   private readonly profile: OpenAiResponsesProviderProfile;
+  private readonly idleTimeoutMs: number;
 
   constructor(
-    options: OpenAiCompatibleProviderOptions,
+    options: OpenAiResponsesProviderOptions,
     profile: OpenAiResponsesProviderProfile,
   ) {
     super();
-    const apiKey = options.apiKey ?? process.env[profile.apiKeyEnv] ?? "";
-    if (!apiKey.trim()) {
+    const apiKey = options.getBearerToken
+      ? ""
+      : (options.apiKey ?? process.env[profile.apiKeyEnv] ?? "");
+    if (!options.getBearerToken && !apiKey.trim()) {
       throw new ProviderAuthenticationError(profile.missingApiKeyMessage);
     }
 
     this.name = profile.name;
     this.model = options.model;
     this.apiKey = apiKey;
+    this.getBearerToken = options.getBearerToken;
     this.retryConfig = options.retryConfig;
     this.onDiagnosticEvent = options.onDiagnosticEvent;
     this.profile = profile;
+    this.idleTimeoutMs = options.idleTimeoutMs ?? 300000;
     this.configureCapabilities(options.contextWindowTokens);
   }
 
@@ -162,8 +179,16 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
         throw new ProviderError(this.profile.missingBodyMessage);
       }
 
-      yield* this.consumeResponsesStream(reader, request);
+      try {
+        yield* this.consumeResponsesStream(reader, request, response);
+      } finally {
+        if (this.profile.requireCompletedResponse) {
+          await reader.cancel().catch(() => {});
+          reader.releaseLock();
+        }
+      }
     } catch (error) {
+      this.throwIfSubscriptionAborted(request.signal);
       if (error instanceof ProviderError) {
         throw error;
       }
@@ -171,7 +196,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
     }
   }
 
-  private createRequestBody(request: ChatRequest): Record<string, unknown> {
+  protected createRequestBody(request: ChatRequest): Record<string, unknown> {
     const body: Record<string, unknown> = {
       model: request.model || this.model,
       input: this.messagesToInput(request.messages),
@@ -358,16 +383,27 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
   ): Promise<Response> {
     let response: Response;
     try {
+      this.throwIfSubscriptionAborted(signal);
+      const token = this.getBearerToken
+        ? await this.getBearerToken(signal)
+        : this.apiKey;
+      this.throwIfSubscriptionAborted(signal);
+      if (!token.trim()) {
+        throw new ProviderAuthenticationError(
+          this.profile.missingApiKeyMessage,
+        );
+      }
       response = await fetch(this.profile.apiUrl, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${this.apiKey}`,
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(body),
         signal,
       });
     } catch (error) {
+      this.throwIfSubscriptionAborted(signal);
       throw this.translateError(error);
     }
 
@@ -388,9 +424,14 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
     );
   }
 
+  private throwIfSubscriptionAborted(signal?: AbortSignal): void {
+    if (this.profile.requireCompletedResponse) signal?.throwIfAborted();
+  }
+
   private async *consumeResponsesStream(
     reader: ReadableStreamDefaultReader<Uint8Array>,
     request: ChatRequest,
+    response: Response,
   ): AsyncIterable<ChatStreamEvent> {
     const state: ResponsesStreamState = {
       functionCallsByOutputIndex: new Map(),
@@ -399,21 +440,24 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
       stopReason: "end_turn",
     };
     const measurementState = { responseMetadataObserved: false };
+    let completed = false;
 
-    for await (const data of readSseDataLines(reader)) {
-      if (data === "[DONE]") {
-        continue;
-      }
-      const event = parseJsonMaybe<ResponsesStreamEvent>(data);
-      if (!event?.type) {
-        continue;
-      }
+    const guard = this.profile.requireCompletedResponse
+      ? { signal: request.signal, idleTimeoutMs: this.idleTimeoutMs }
+      : undefined;
+    for await (const data of readSseDataLines(reader, guard)) {
+      const event = this.parseStreamEvent(data);
+      if (!event) continue;
       this.captureTraceFields(event, request, measurementState);
+      completed = this.trackSubscriptionCompletion(event, response, completed);
       const outputEvent = this.applyStreamEvent(event, state);
       if (outputEvent) {
         yield outputEvent;
       }
+      if (completed && this.profile.requireCompletedResponse) break;
     }
+
+    this.requireStreamCompletion(completed);
 
     const toolCallsEvent = this.buildToolCallsEvent(state);
     if (toolCallsEvent) {
@@ -424,6 +468,58 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
       stopReason: state.stopReason,
       rawProviderReason: state.rawStopReason,
     };
+  }
+
+  private parseStreamEvent(data: string): ResponsesStreamEvent | null {
+    if (data === "[DONE]") return null;
+    const event = parseJsonMaybe<ResponsesStreamEvent>(data);
+    if (event?.type) return event;
+    if (this.profile.requireCompletedResponse)
+      throw new ProviderError(
+        "Malformed subscription stream; no tools were executed.",
+      );
+    return null;
+  }
+
+  private trackSubscriptionCompletion(
+    event: ResponsesStreamEvent,
+    response: Response,
+    completed: boolean,
+  ): boolean {
+    if (!this.profile.requireCompletedResponse) return completed;
+    return this.validateSubscriptionEvent(event, response) || completed;
+  }
+
+  private requireStreamCompletion(completed: boolean): void {
+    if (this.profile.requireCompletedResponse && !completed) {
+      throw new ProviderError(
+        "Subscription stream ended without response.completed; no tools were executed.",
+      );
+    }
+  }
+
+  private validateSubscriptionEvent(
+    event: ResponsesStreamEvent,
+    response: Response,
+  ): boolean {
+    if (event.type === "response.incomplete") {
+      throw new ProviderError(
+        "Subscription response was incomplete; no tools were executed.",
+      );
+    }
+    if (
+      RESPONSES_FAILURE_EVENTS.has(event.type ?? "") ||
+      event.type === "error"
+    ) {
+      const details = event.response?.error ??
+        event.error ?? { code: event.type };
+      throw this.translateError(
+        new Error("Subscription stream failed."),
+        response,
+        JSON.stringify({ error: details }),
+      );
+    }
+    return event.type === "response.completed";
   }
 
   private captureTraceFields(

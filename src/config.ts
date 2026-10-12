@@ -90,7 +90,12 @@ export interface AnthropicProviderConfig extends BaseProviderConfig {
 /**
  * OpenAI provider configuration using the Responses API.
  */
+export type OpenAiAuthConfig =
+  | { mode: "api-key" }
+  | { mode: "chatgpt"; accountId: string };
+
 export interface OpenAiProviderConfig extends BaseProviderConfig {
+  auth?: OpenAiAuthConfig;
   type: "openai";
   apiKey?: string;
 }
