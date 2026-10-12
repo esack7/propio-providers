@@ -89,3 +89,11 @@ export type {
   ProviderTraceObserver,
   ProviderUsageAvailability,
 } from "./trace.js";
+
+export {
+  OpenAiSubscriptionProvider,
+  ChatGptPlanError,
+} from "./providers/openaiSubscription.js";
+export type { OpenAiSubscriptionOptions } from "./providers/openaiSubscription.js";
+export type { OpenAiAuthConfig } from "./config.js";
+export type { ProviderRuntimeOptions } from "./factory.js";

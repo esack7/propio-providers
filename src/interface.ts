@@ -5,6 +5,8 @@ import { ChatRequest, ChatStreamEvent } from "./types.js";
  */
 export interface ProviderCapabilities {
   readonly contextWindowTokens: number;
+  /** False means images must be rejected before submission. Undefined preserves legacy behavior. */
+  readonly supportsImages?: boolean;
   /**
    * Whether the provider accepts synthetic (caller-fabricated) assistant
    * tool-call history that was never produced by the model. Providers that

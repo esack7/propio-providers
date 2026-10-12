@@ -177,3 +177,52 @@ npm run build
 ## License
 
 MIT
+
+## ChatGPT plan access
+
+OpenAI API access remains the default when `auth` is absent or `{ mode: "api-key" }`. ChatGPT plan access is explicit and never reads an API environment key or falls back to API billing. The application owns browser sign-in, secure storage, renewal and account selection.
+
+```ts
+import {
+  createProvider,
+  OpenAiSubscriptionProvider,
+} from "@propio-ai/providers";
+
+// applicationCredentials is your application's immutable account registry.
+const config = {
+  type: "openai" as const,
+  name: "openai-personal",
+  auth: { mode: "chatgpt" as const, accountId: "your-registration-id" },
+  defaultModel: "your-discovered-model",
+  models: [
+    {
+      key: "your-discovered-model",
+      name: "Selected model",
+      contextWindowTokens: 128000,
+    },
+  ],
+};
+const provider = createProvider(
+  config,
+  undefined,
+  undefined,
+  false,
+  undefined,
+  {
+    openAiCredentialSource: (accountId) => ({
+      getAccessToken: (signal) =>
+        applicationCredentials.getAccessToken(accountId, signal),
+    }),
+  },
+);
+
+// Or construct directly, with the same caller-owned renewable source.
+const direct = new OpenAiSubscriptionProvider({
+  model: config.defaultModel,
+  contextWindowTokens: 128000, // User-selected prompt budget; not catalog capacity evidence.
+  getAccessToken: (signal) =>
+    applicationCredentials.getAccessToken(config.auth.accountId, signal),
+});
+```
+
+The source runs before each request attempt and must durably persist rotating credentials before returning a token. Do not serialize the source or tokens into provider configuration. Public Responses requests use developer instructions, full-history replay and local namespaced functions. Tools and terminal success require `response.completed`; failures, incomplete/EOF, malformed streams, abort and idle timeout stop tool admission. Text is supported; images and hosted tools are explicitly rejected pending verification. Safe `ChatGptPlanError` metadata includes code/status/request ID; genuine context-length errors preserve `ProviderContextLengthError`. Plan limits link to [Manage usage](https://chatgpt.com/settings/usage), and do not trigger billing changes.

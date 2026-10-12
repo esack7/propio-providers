@@ -1,3 +1,12 @@
+import { validateOpenAiAuthConfig } from "./configValidation.js";
+import { OpenAiSubscriptionProvider } from "./providers/openaiSubscription.js";
+
+/** Caller-owned, immutable registration binding; never serialized into config. */
+export interface ProviderRuntimeOptions {
+  readonly openAiCredentialSource?: (accountId: string) => {
+    readonly getAccessToken: (signal?: AbortSignal) => Promise<string>;
+  };
+}
 import { LLMProvider } from "./interface.js";
 import {
   ProviderConfig,
@@ -64,6 +73,7 @@ export function createProvider(
   onDiagnosticEvent?: ProviderDiagnosticListener,
   debugLoggingEnabled = false,
   retryConfig?: ProviderRetryConfig,
+  runtimeOptions?: ProviderRuntimeOptions,
 ): LLMProvider {
   const model = modelKey || config.defaultModel;
 
@@ -168,6 +178,23 @@ export function createProvider(
     case "openai": {
       const openAiConfig = config as OpenAiProviderConfig;
       const modelConfig = resolveModelConfig();
+      validateOpenAiAuthConfig(openAiConfig);
+      if (openAiConfig.auth?.mode === "chatgpt") {
+        const source = runtimeOptions?.openAiCredentialSource?.(
+          openAiConfig.auth.accountId,
+        );
+        if (!source)
+          throw new Error(
+            "ChatGPT access requires a caller-owned openAiCredentialSource for the selected account.",
+          );
+        return new OpenAiSubscriptionProvider({
+          model,
+          contextWindowTokens: modelConfig.contextWindowTokens,
+          getAccessToken: source.getAccessToken,
+          retryConfig,
+          onDiagnosticEvent,
+        });
+      }
       return new OpenAiProvider({
         model,
         contextWindowTokens: modelConfig.contextWindowTokens,

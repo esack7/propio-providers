@@ -6,7 +6,7 @@ import type {
   ChatToolCall,
   ToolResult,
 } from "../types.js";
-import { ProviderCapacityError } from "../types.js";
+import { ProviderCapacityError, ProviderError } from "../types.js";
 import type { WithRetryOptions } from "./withRetry.js";
 import { createProviderAttemptTraceHooks } from "../trace.js";
 
@@ -223,12 +223,15 @@ export function buildOpenAIStreamToolCalls<
 
 export async function* readSseDataLines(
   reader: ReadableStreamDefaultReader<Uint8Array>,
+  guard?: { signal?: AbortSignal; idleTimeoutMs: number },
 ): AsyncIterable<string> {
   const decoder = new TextDecoder();
   let buffer = "";
 
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = guard
+      ? await readGuardedChunk(reader, guard)
+      : await reader.read();
     if (done) {
       break;
     }
@@ -243,6 +246,45 @@ export async function* readSseDataLines(
       }
     }
   }
+}
+
+function readGuardedChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  guard: { signal?: AbortSignal; idleTimeoutMs: number },
+): ReturnType<ReadableStreamDefaultReader<Uint8Array>["read"]> {
+  guard.signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      clearTimeout(timer);
+      guard.signal?.removeEventListener("abort", abort);
+    };
+    const fail = (error: unknown) => {
+      finish();
+      void reader.cancel().catch(() => {});
+      reject(error);
+    };
+    const abort = () => fail(guard.signal?.reason);
+    const timer = setTimeout(
+      () =>
+        fail(
+          new ProviderError(
+            "Subscription stream idle timeout; completion was not confirmed.",
+          ),
+        ),
+      guard.idleTimeoutMs,
+    );
+    guard.signal?.addEventListener("abort", abort, { once: true });
+    reader.read().then(
+      (chunk) => {
+        finish();
+        resolve(chunk);
+      },
+      (error) => {
+        finish();
+        reject(error);
+      },
+    );
+  });
 }
 
 export function parseJsonMaybe<T>(value: string): T | null {
