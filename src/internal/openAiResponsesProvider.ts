@@ -122,6 +122,8 @@ export interface OpenAiResponsesProviderProfile {
 export interface OpenAiResponsesProviderOptions extends OpenAiCompatibleProviderOptions {
   /** Application-owned credentials, resolved for each network attempt. */
   readonly getBearerToken?: (signal?: AbortSignal) => Promise<string>;
+  /** Subscription stream inactivity bound; does not apply to API providers. */
+  readonly idleTimeoutMs?: number;
 }
 
 /** Shared implementation for providers exposing the OpenAI Responses wire API. */
@@ -133,13 +135,16 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
   private readonly retryConfig?: OpenAiCompatibleProviderOptions["retryConfig"];
   private readonly onDiagnosticEvent?: ProviderDiagnosticListener;
   private readonly profile: OpenAiResponsesProviderProfile;
+  private readonly idleTimeoutMs: number;
 
   constructor(
     options: OpenAiResponsesProviderOptions,
     profile: OpenAiResponsesProviderProfile,
   ) {
     super();
-    const apiKey = options.apiKey ?? process.env[profile.apiKeyEnv] ?? "";
+    const apiKey = options.getBearerToken
+      ? ""
+      : (options.apiKey ?? process.env[profile.apiKeyEnv] ?? "");
     if (!options.getBearerToken && !apiKey.trim()) {
       throw new ProviderAuthenticationError(profile.missingApiKeyMessage);
     }
@@ -151,6 +156,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
     this.retryConfig = options.retryConfig;
     this.onDiagnosticEvent = options.onDiagnosticEvent;
     this.profile = profile;
+    this.idleTimeoutMs = options.idleTimeoutMs ?? 300000;
     this.configureCapabilities(options.contextWindowTokens);
   }
 
@@ -182,7 +188,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
         }
       }
     } catch (error) {
-      request.signal?.throwIfAborted();
+      this.throwIfSubscriptionAborted(request.signal);
       if (error instanceof ProviderError) {
         throw error;
       }
@@ -377,11 +383,11 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
   ): Promise<Response> {
     let response: Response;
     try {
-      signal?.throwIfAborted();
+      this.throwIfSubscriptionAborted(signal);
       const token = this.getBearerToken
         ? await this.getBearerToken(signal)
         : this.apiKey;
-      signal?.throwIfAborted();
+      this.throwIfSubscriptionAborted(signal);
       if (!token.trim()) {
         throw new ProviderAuthenticationError(
           this.profile.missingApiKeyMessage,
@@ -397,6 +403,7 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
         signal,
       });
     } catch (error) {
+      this.throwIfSubscriptionAborted(signal);
       throw this.translateError(error);
     }
 
@@ -417,6 +424,10 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
     );
   }
 
+  private throwIfSubscriptionAborted(signal?: AbortSignal): void {
+    if (this.profile.requireCompletedResponse) signal?.throwIfAborted();
+  }
+
   private async *consumeResponsesStream(
     reader: ReadableStreamDefaultReader<Uint8Array>,
     request: ChatRequest,
@@ -432,13 +443,13 @@ export class OpenAiResponsesProvider extends OpenAiCompatibleProvider {
     let completed = false;
 
     const guard = this.profile.requireCompletedResponse
-      ? { signal: request.signal, idleTimeoutMs: 60000 }
+      ? { signal: request.signal, idleTimeoutMs: this.idleTimeoutMs }
       : undefined;
     for await (const data of readSseDataLines(reader, guard)) {
       const event = this.parseStreamEvent(data);
       if (!event) continue;
-      completed = this.trackSubscriptionCompletion(event, response, completed);
       this.captureTraceFields(event, request, measurementState);
+      completed = this.trackSubscriptionCompletion(event, response, completed);
       const outputEvent = this.applyStreamEvent(event, state);
       if (outputEvent) {
         yield outputEvent;

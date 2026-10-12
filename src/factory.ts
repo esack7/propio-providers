@@ -1,12 +1,6 @@
 import { validateOpenAiAuthConfig } from "./configValidation.js";
 import { OpenAiSubscriptionProvider } from "./providers/openaiSubscription.js";
 
-/** Caller-owned, immutable registration binding; never serialized into config. */
-export interface ProviderRuntimeOptions {
-  readonly openAiCredentialSource?: (accountId: string) => {
-    readonly getAccessToken: (signal?: AbortSignal) => Promise<string>;
-  };
-}
 import { LLMProvider } from "./interface.js";
 import {
   ProviderConfig,
@@ -34,6 +28,15 @@ import { CloudflareProvider } from "./providers/cloudflare.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
 import { OpenAiProvider } from "./providers/openai.js";
 import { MetaProvider } from "./providers/meta.js";
+
+/** Caller-owned, immutable registration binding; never serialized into config. */
+export interface ProviderRuntimeOptions {
+  readonly openAiCredentialSource?: (accountId: string) => {
+    readonly getAccessToken: (signal?: AbortSignal) => Promise<string>;
+  };
+  /** Applies only to explicit ChatGPT plan providers; defaults to five minutes. */
+  readonly openAiSubscription?: { readonly idleTimeoutMs?: number };
+}
 
 /**
  * Factory function to create LLM provider instances from configuration.
@@ -191,6 +194,7 @@ export function createProvider(
           model,
           contextWindowTokens: modelConfig.contextWindowTokens,
           getAccessToken: source.getAccessToken,
+          idleTimeoutMs: runtimeOptions?.openAiSubscription?.idleTimeoutMs,
           retryConfig,
           onDiagnosticEvent,
         });

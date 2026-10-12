@@ -1,9 +1,15 @@
 import type { ChatRequest } from "../types.js";
-import { ProviderError, ProviderContextLengthError } from "../types.js";
+import {
+  ProviderError,
+  ProviderContextLengthError,
+  ProviderRateLimitError,
+  ProviderAuthenticationError,
+} from "../types.js";
 import {
   OpenAiResponsesProvider,
   type OpenAiResponsesProviderOptions,
 } from "../internal/openAiResponsesProvider.js";
+import { parseRetryAfterSeconds } from "../internal/shared.js";
 
 function record(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null
@@ -62,6 +68,19 @@ export class ChatGptPlanError extends ProviderError {
 /** Direct plan access. Authentication, storage and billing selection belong to the caller. */
 export class OpenAiSubscriptionProvider extends OpenAiResponsesProvider {
   constructor(options: OpenAiSubscriptionOptions) {
+    if (typeof options.getAccessToken !== "function")
+      throw new ProviderAuthenticationError(
+        "ChatGPT access requires an application-owned getAccessToken function.",
+      );
+    if (
+      options.idleTimeoutMs !== undefined &&
+      (!Number.isSafeInteger(options.idleTimeoutMs) ||
+        options.idleTimeoutMs <= 0 ||
+        options.idleTimeoutMs > 2147483647)
+    )
+      throw new Error(
+        "Subscription idleTimeoutMs must be a positive integer no greater than 2147483647.",
+      );
     super(
       { ...options, getBearerToken: options.getAccessToken },
       {
@@ -72,8 +91,9 @@ export class OpenAiSubscriptionProvider extends OpenAiResponsesProvider {
         missingBodyMessage: "Subscription response had no body",
         unauthorizedMessage: "ChatGPT plan permission was denied",
         capacityMessage: "ChatGPT plan usage is temporarily unavailable",
-        authenticationMessage: "ChatGPT sign-in is required",
-        rateLimitMessage: "ChatGPT plan usage limit reached",
+        authenticationMessage:
+          "ChatGPT sign-in is required. Check the selected account and granted scopes.",
+        rateLimitMessage: "ChatGPT request rate limit reached",
         serviceErrorMessage: "ChatGPT plan service error",
         connectionErrorMessage: "Failed to connect to ChatGPT plan inference",
         requestFailedMessage: "ChatGPT plan inference failed",
@@ -122,7 +142,8 @@ export class OpenAiSubscriptionProvider extends OpenAiResponsesProvider {
     responseBody?: string,
   ): ProviderError {
     if (error instanceof ProviderError) return error;
-    if (error instanceof Error && error.name === "AbortError") throw error;
+    if (record(error).name === "AbortError")
+      return new ProviderError("Request cancelled");
     if (!responseBody && !response)
       return new ChatGptPlanError(
         "ChatGPT transport or credential acquisition failed; no automatic replay.",
@@ -130,15 +151,16 @@ export class OpenAiSubscriptionProvider extends OpenAiResponsesProvider {
       );
     const details = planErrorDetails(responseBody);
     const metadata = planResponseMetadata(response);
-    if (details.code === "context_length_exceeded")
+    const typed = typedPlanError(details.code);
+    if (typed) return Object.assign(typed, details, metadata);
+    if (isStandardHttpFailure(details.code, response))
       return Object.assign(
-        new ProviderContextLengthError(
-          "ChatGPT prompt exceeds the model context window.",
+        super.translateError(
+          new Error("ChatGPT plan request failed."),
+          response,
         ),
-        {
-          code: details.code,
-          ...metadata,
-        },
+        details,
+        metadata,
       );
     const retryable = retryableAdmission(details.code, metadata.status);
     const message = planFailureMessage(details.code);
@@ -157,22 +179,58 @@ export class OpenAiSubscriptionProvider extends OpenAiResponsesProvider {
     if (error instanceof ChatGptPlanError) {
       return error.retryable;
     }
-    return false;
+    // A generic HTTP 429 is safe to retry before inference starts. Plan usage
+    // limits and ambiguous transport failures must never become replay retries.
+    return error instanceof ProviderRateLimitError;
   }
 }
 
+function typedPlanError(code?: string): ProviderError | undefined {
+  if (code === "subscription_sharing_invalid_user")
+    return new ProviderAuthenticationError(
+      "ChatGPT subscriber context was not accepted. Check the selected account and granted scopes.",
+    );
+  if (code === "context_length_exceeded")
+    return new ProviderContextLengthError(
+      "ChatGPT prompt exceeds the model context window.",
+    );
+  return undefined;
+}
+
+const TEMPORARY_ADMISSION_CODES = new Set([
+  "usage_temporarily_unavailable",
+  "user_temporarily_unavailable",
+  "usage_unavailable",
+  "user_unavailable",
+  "routing_temporarily_unavailable",
+  "server_error",
+]);
+function isTemporaryAdmissionCode(code?: string): boolean {
+  return TEMPORARY_ADMISSION_CODES.has(
+    (code ?? "").replace(/^subscription_sharing_/, ""),
+  );
+}
 function retryableAdmission(
   code: string | undefined,
   status: number | undefined,
 ): boolean {
   return (
-    [
-      "usage_temporarily_unavailable",
-      "user_temporarily_unavailable",
-      "routing_temporarily_unavailable",
-      "server_error",
-    ].includes((code ?? "").replace(/^subscription_sharing_/, "")) &&
-    [502, 503, 504].includes(status ?? 0)
+    isTemporaryAdmissionCode(code) && [502, 503, 504].includes(status ?? 0)
+  );
+}
+function isPlanSpecificCode(code?: string): boolean {
+  return (
+    code?.startsWith("subscription_sharing_") === true ||
+    code?.startsWith("chatpass_v2_") === true ||
+    isTemporaryAdmissionCode(code)
+  );
+}
+function isStandardHttpFailure(
+  code: string | undefined,
+  response?: Response,
+): response is Response {
+  return Boolean(
+    response && response.status >= 400 && !isPlanSpecificCode(code),
   );
 }
 function planFailureMessage(code?: string): string {
@@ -191,6 +249,8 @@ function planResponseMetadata(response?: Response) {
   return {
     status: response.status,
     requestId: response.headers.get("x-request-id") ?? undefined,
-    retryAfterSeconds: Number(response.headers.get("retry-after")) || undefined,
+    retryAfterSeconds: parseRetryAfterSeconds(
+      response.headers.get("retry-after"),
+    ),
   };
 }

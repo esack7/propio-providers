@@ -22,11 +22,12 @@ function response(events: unknown[]) {
     { headers: { "x-request-id": "req-poc" } },
   );
 }
-function provider(token = async () => "plan-token") {
+function provider(token = async () => "plan-token", idleTimeoutMs?: number) {
   return new OpenAiSubscriptionProvider({
     model: request.model,
     contextWindowTokens: 128000,
     getAccessToken: token,
+    idleTimeoutMs,
     retryConfig: { maxRetries: 0, consecutive529Limit: 1 },
   });
 }
@@ -246,8 +247,8 @@ it("does not fall back to API credentials when the account callback fails", asyn
 });
 
 it("rejects blank tokens", async () => {
-  await expect(collect(provider(async () => ""))).rejects.toThrow(
-    "Continue with ChatGPT",
+  await expect(collect(provider(async () => ""))).rejects.toBeInstanceOf(
+    ProviderAuthenticationError,
   );
 });
 
@@ -308,7 +309,9 @@ it("rejects an idle unconfirmed stream and closes its reader", async () => {
         }),
       ),
     );
-    const pending = expect(collect(provider())).rejects.toThrow("idle timeout");
+    const pending = expect(collect(provider(undefined, 60000))).rejects.toThrow(
+      "idle timeout",
+    );
     await jest.advanceTimersByTimeAsync(60001);
     await pending;
     expect(cancelled).toBe(true);
